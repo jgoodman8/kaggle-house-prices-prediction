@@ -1,0 +1,38 @@
+---
+title: "Kaggle House Prices"
+author: Javier Guzman Figueira Dominguez
+date: Diciembre 2017
+output: md_document
+---
+
+Inspección de los datos
+-----------------------
+
+```{r}
+train <- read.csv("train.csv", header = TRUE, sep = ",")
+```
+
+Las dimensiones del conjunto de entrenamiento son las siguientes:
+
+```{r}
+dim(train)
+```
+
+A continuación, procedemos a examinar las variables del dataset:
+
+```{r}
+str(train)
+```
+
+Y observamos el inicio:
+
+```{r}
+head(train)
+```
+
+```{r}
+names(train)[which(sapply(train, is.numeric))] # Variables numéricas
+
+colSums(sapply(train, is.na))
+```
+

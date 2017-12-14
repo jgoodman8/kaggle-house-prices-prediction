@@ -5,11 +5,15 @@ date: Diciembre 2017
 output: md_document
 ---
 
-Inspección de los datos
+InspecciÃ³nn de los datos
 -----------------------
 
 ```{r}
-train <- read.csv("train.csv", header = TRUE, sep = ",")
+library(pls)
+library(ggplot2)
+
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
 ```
 
 Las dimensiones del conjunto de entrenamiento son las siguientes:
@@ -18,7 +22,7 @@ Las dimensiones del conjunto de entrenamiento son las siguientes:
 dim(train)
 ```
 
-A continuación, procedemos a examinar las variables del dataset:
+A continuacin, procedemos a examinar las variables del dataset:
 
 ```{r}
 str(train)
@@ -30,9 +34,53 @@ Y observamos el inicio:
 head(train)
 ```
 
-```{r}
-names(train)[which(sapply(train, is.numeric))] # Variables numéricas
+Tratamiento de valores perdidos
+-------------------------------
 
-colSums(sapply(train, is.na))
+```{r}
+numeric <- names(train)[which(sapply(train, is.numeric))] # Variables numéricas
+
+lost_numeric_values_count <- colSums(sapply(train[, numeric], is.na))
+
+plot_Missing <- function(data_in, title = NULL) {
+    temp_df <- as.data.frame(ifelse(is.na(data_in), 0, 1))
+    temp_df <- temp_df[, order(colSums(temp_df))]
+    data_temp <- expand.grid(list(x = 1:nrow(temp_df), y = colnames(temp_df)))
+    data_temp$m <- as.vector(as.matrix(temp_df))
+    data_temp <- data.frame(x = unlist(data_temp$x), y = unlist(data_temp$y), m = unlist(data_temp$m))
+    ggplot2::ggplot(data_temp) +
+      ggplot2::geom_tile(ggplot2::aes(x = x, y = y, fill = factor(m))) +
+      ggplot2::scale_fill_manual(values = c("white", "black"), name = "Missing\n(0=Yes, 1=No)") +
+      ggplot2::theme_light() +
+      ggplot2::ylab("") + ggplot2::xlab("") +
+      ggplot2::ggtitle(title)
+}
+
+plot_Missing(train[, colSums(is.na(train)) > 0])
 ```
 
+Predicion variable distribution
+-------------------------------
+
+```{r}
+par(mfrow = c(1, 2))
+hist(train$SalePrice, main = "SalePrice")
+hist(log10(train$SalePrice), main = "Log10(SalePrice)")
+
+par(mfrow = c(1, 2))
+boxplot(train$SalePrice, main = "SalePrice")
+boxplot(log10(train$SalePrice), main = "Log10(SalePrice)")
+```
+
+Los values (NA) count
+
+```{r}
+na_info <- apply(is.na(train), 2, sum)
+lost_values_info <- which(na_info > 0)
+na_info[lost_values_info]
+```
+
+```{r}
+ggplot(data = train, aes(x = Alley, y = log(SalePrice), fill = Alley)) +
+        geom_boxplot()
+```

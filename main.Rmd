@@ -9,7 +9,7 @@ Inspecci贸nn de los datos
 -----------------------
 
 ```{r}
-library(pls)
+# library(pls)
 library(ggplot2)
 
 train <- read.csv("train.csv")
@@ -20,6 +20,7 @@ Las dimensiones del conjunto de entrenamiento son las siguientes:
 
 ```{r}
 dim(train)
+dim(test)
 ```
 
 A continuacin, procedemos a examinar las variables del dataset:
@@ -38,7 +39,7 @@ Tratamiento de valores perdidos
 -------------------------------
 
 ```{r}
-numeric <- names(train)[which(sapply(train, is.numeric))] # Variables num閞icas
+numeric <- names(train)[which(sapply(train, is.numeric))] # Variables num?ricas
 
 lost_numeric_values_count <- colSums(sapply(train[, numeric], is.na))
 
@@ -77,10 +78,46 @@ Los values (NA) count
 ```{r}
 na_info <- apply(is.na(train), 2, sum)
 lost_values_info <- which(na_info > 0)
-na_info[lost_values_info]
+filtered_lost_values_info <- na_info[lost_values_info]
+df_filtered_lost_values_info <- data.frame(filtered_lost_values_info)
+# TODO: Change and add a histogram
+ggplot() + 
+  geom_point(aes(x = rownames(df_filtered_lost_values_info), y = df_filtered_lost_values_info$filtered_lost_values_info)) +
+  geom_hline(yintercept = nrow(train)*0.05, color = 'pink') + 
+  geom_hline(yintercept = nrow(train)*0.10, color = 'orange') +
+  geom_hline(yintercept = nrow(train)*0.20, color = 'blue') + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  xlab('Features with lost values') +
+  ylab('Number of lost values')
 ```
 
+- Distribuci贸n de los valores perdidos en funci贸n de la variable Log10(SalePrice) -
+
 ```{r}
-ggplot(data = train, aes(x = Alley, y = log(SalePrice), fill = Alley)) +
+for(feature in names(filtered_lost_values_info)) {
+  categories <- train[, feature]
+  print(ggplot(data = train, aes(x = feature, y = log(SalePrice), fill = categories)) +
+        geom_boxplot())
+}
+```
+
+-Examinamos la distribuci贸n de las variables continuas con respecto a Log10(SalePrice)-
+```{r}
+numeric_features <- numeric <- names(train)[which(sapply(train, is.numeric))]
+numeric_feature_with_lost_values <- intersect(numeric_features, names(filtered_lost_values_info))
+for(feature in numeric_feature_with_lost_values) {
+  print(qplot(x = train[feature], y = log(train$SalePrice), geom = c("point", "smooth"), method = lm, xlab = feature))
+}
+```
+
+
+-LogFrontage-
+```{r}
+
+```
+
+
+```{r}
+ggplot(data = train, aes(x = 'Alley', y = log(SalePrice), fill = Alley)) +
         geom_boxplot()
 ```

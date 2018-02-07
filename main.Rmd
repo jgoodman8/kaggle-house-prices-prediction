@@ -9,6 +9,9 @@ Inspecci√≥nn de los datos
 -----------------------
 
 ```{r}
+required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages)
 # library(pls)
 library(ggplot2)
 library(dplyr)
@@ -43,7 +46,7 @@ Tratamiento de valores perdidos
 -------------------------------
 
 ```{r}
-numeric <- names(train)[which(sapply(train, is.numeric))] # Variables num?ricas
+numeric <- names(train)[which(sapply(train, is.numeric))] # Variables num√©ricas
 
 lost_numeric_values_count <- colSums(sapply(train[, numeric], is.na))
 
@@ -67,6 +70,8 @@ plot_Missing(train[, colSums(is.na(train)) > 0])
 Predicion variable distribution
 -------------------------------
 
+
+
 ```{r}
 par(mfrow = c(1, 2))
 hist(train$SalePrice, main = "SalePrice")
@@ -84,7 +89,9 @@ na_info <- apply(is.na(train), 2, sum)
 lost_values_info <- which(na_info > 0)
 filtered_lost_values_info <- na_info[lost_values_info]
 df_filtered_lost_values_info <- data.frame(filtered_lost_values_info)
-# TODO: Change and add a histogram
+
+# TODO: Put dots instead of an histogram
+
 ggplot() + 
   geom_point(aes(x = rownames(df_filtered_lost_values_info), y = df_filtered_lost_values_info$filtered_lost_values_info)) +
   geom_hline(yintercept = nrow(train)*0.05, color = 'pink') + 
@@ -95,7 +102,7 @@ ggplot() +
   ylab('Number of lost values')
 ```
 
-- Distribuci√≥n de los valores perdidos en funci√≥n de la variable Log10(SalePrice) -
+- Distribuci√≥n de los valores perdidos en funci√≥n de la variable Log(SalePrice) -
 
 ```{r}
 for(feature in names(filtered_lost_values_info)) {
@@ -105,7 +112,8 @@ for(feature in names(filtered_lost_values_info)) {
 }
 ```
 
--Examinamos la distribuci√≥n de las variables continuas con respecto a Log10(SalePrice)-
+-Examinamos la distribuci√≥n de las variables continuas con respecto a Log(SalePrice)-
+
 ```{r}
 numeric_features <- numeric <- names(train)[which(sapply(train, is.numeric))]
 numeric_feature_with_lost_values <- intersect(numeric_features, names(filtered_lost_values_info))
@@ -119,7 +127,7 @@ for(feature in numeric_feature_with_lost_values) {
 
 
 -GarageYrBlt-
-Muy relacionado con YearBuilt (a priori por lÛgica). A posteriori, GarageYrBlt tiene a ser igual a YearBuilt
+Se aprecia que es una propidad que, l√≥gicamente, est√° muy relacionada con YearBuilt (a√±o de construcci√≥n). En general, se puede decir que GarageYrBlt tiende a ser igual a YearBuilt. Por consiguiente, en los valores perdidos de GarageYrBlt, se procede a as√≠gnar el correspondiente valor de YearBuilt.
 ```{r}
 ggplot(data = train, aes(x = train$GarageYrBlt, y = train$YearBuilt)) + 
           geom_point() + 
@@ -129,35 +137,38 @@ train$GarageYrBlt[is.na(train$GarageYrBlt)] <- train$YearBuilt[is.na(train$Garag
 ```
 
 -LotFrontage-
-RelaciÛn a travÈs de otra variable
+Por l√≥gica, se puede decir que el √°rea de la propiedad con la longitud de la fachada. Para confirmarlo, comprobamos la correlaci√≥n entre ellas:
+
 ```{r}
 cor(train$LotFrontage, train$LotArea, use = "complete.obs")
 cor(log(train$LotFrontage), log(train$LotArea), use = "complete.obs")
-# summary(lm(log(train$SalePrice) ~ log10(train$LotFrontage) + log10(train$LotArea)))
+```
 
+Y visualizamos su relaci√≥n:
+
+```{r}
 ggplot(data = train, aes(x = train$LotArea, y = train$LotFrontage)) + 
   geom_point() + 
-  # xlim(0, 100) +
-  # ylim(0, 200) +
   geom_smooth(method="lm")
 
 ggplot(data = train, aes(x = log(train$LotArea), y = log(train$LotFrontage))) + 
           geom_point() + 
           geom_smooth(method="lm")
-
-# train <- dplyr::select(train -LotFrontage)
-# test <- dplyr::select(test, -LotFrontage)
 ```
 
-Existe una alta correlaciÛn directa de LotFrontage con Lot Area. Una de las variables representa el ·rea de la propiedad y la otra la longitud del frontal de la misma. Obviamente, estas dos propiedades est·n relacionadas y seguramente una de ellas sea desechada en el proceso de selecciÛn de variables. En este paso sustituiremos los valores por la mediana de los valores existentes
+Se puede confirmar que existe una alta correlaci√≥n directa entre *LotFrontage* con *LotArea*. Dado, que estas dos propiedades est√°n relacionadas, seguramente una de ellas sea desechada en el proceso de selecci√≥n de variables. Idependientemente de ello, en este paso sustituiremos los valores de *LotFrontage*, por la mediana de los valores existentes.
 
 ```{r}
-#TODO: Quiz·s sea interesante cargase esta variable (comprobar m·s adelante)
-
 train$LotFrontage[is.na(train$LotFrontage)] <- median(train$LotFrontage[!is.na(train$LotFrontage)])
-
+cor(train$LotFrontage, train$LotArea, use = "complete.obs")
 cor(log(train$LotFrontage), log(train$LotArea), use = "complete.obs")
+```
 
+Observamos que la correlaci√≥n contin√∫a siendo similar despu√©s de tratar los valores perdidos en *LotFrontage*.
+
+**TODO:** Quiz√°s remplazar con la media no sea la mejor opci√≥n (cambia bastante la correlaci√≥n). Si no se encuentra una soluci√≥n mejor, quiz√°s habr√≠a que cargarse directamente la variable.
+
+```{r}
 ggplot(data = train, aes(x = log(train$LotArea), y = log(train$LotFrontage))) + 
           geom_point() + 
           geom_smooth(method="lm")
@@ -169,34 +180,38 @@ Existe una gran cantidad de entradas con valor 0. Esto seguramente se deba a la 
 qplot(data = train, x = log(MasVnrArea), y = log(SalePrice), col = MasVnrType)
 ```
 
-TambiÈn observamos que en ambas variables los valores perdidos (8) forman parte de los mismo ejemplos:
+Tambi√©n observamos que en ambas variables los valores perdidos (8) forman parte de los mismos ejemplos:
 ```{r}
 ifelse(train$Id[is.na(train$MasVnrArea)] == train$Id[is.na(train$MasVnrType)], "Equals", "Non equals")
 ```
 
-Eliminamos la caraterÌstica "MasVnrArea" ya que las entradas con 0 por ser del tipo "None" hacen que la informaciÛn desprendida de la variable estÈ "deformada".
+Se elimina la carater√≠stica *MasVnrArea* ya que las entradas con valor 0, por ser del tipo "None", hacen que la informaci√≥n desprendida de la variable est√© "deformada".
 
 ```{r}
 # TODO: cambiar la forma de eleminar las columnas para que no se parezca tanto
 train <- dplyr::select(train, -MasVnrArea)
 ```
 
-Observamos MasVnrType en relaciÛn a SalePrice para saber como tratar sus valores perdidos.
+Observamos *MasVnrType* en relaci√≥n a *SalePrice* para entender su distribuci√≥n.
 
 ```{r}
-qplot(data = train, x = train$MasVnrType, y = log(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
+qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
 ```
 
-Asignamos a los valores perdidos el tipo "Stone"
+Asignamos a los valores perdidos el tipo "BrkFace", por mayor proximidad de sus medias. Aunque tambi√©n se podr√≠a asignar "Stone".
 
 ```{r}
-train$MasVnrType[is.na(train$MasVnrType)] <- "Stone"
+train$MasVnrType[is.na(train$MasVnrType)] <- "BrkFace"
 ```
 
-Variables categÛricas
+```{r}
+qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
+```
+
+Variables categ?ricas
 ---------------------
 
-Las siguientes caraterÌsticas contienen valores perdidos que representan la ausencia de la propiedad a la que representan. Se le asignar· el tipo "None" a los valores NA.
+Las siguientes carater√≠sticas contienen valores perdidos que representan la ausencia de la propiedad a la que representan. Por consiguiente, se le asignar√°n el tipo "None" a aquellos valores ausentes (NA). Dichas caracter√≠sticas son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
 
 ```{r}
 none_types <-
@@ -236,13 +251,13 @@ Un valor perdido. Se le asigna el tipo mayoritario.
 train$Electrical[is.na(train$Electrical)] <- names(sort(summary(train$Electrical), decreasing = T)[1])
 ```
 
-AsÌ mismo, hay que eliminar la propiedad Id
+As? mismo, hay que eliminar la propiedad Id
 
 ```{r}
 train <- dplyr::select(train, -Id)
 ```
 
-CorrecciÛn de valores perdidos en el conjunto de test
+Correcci?n de valores perdidos en el conjunto de test
 =====================================================
 
 ```{r}
@@ -283,7 +298,7 @@ test$MasVnrType[is.na(test$MasVnrType)] <- "Stone"
 test <- dplyr::select(test, -Id)
 ```
 
-Ahora las dem·s variables que sean numÈricas (se les asigna la mediana)
+Ahora las dem?s variables que sean num?ricas (se les asigna la mediana)
 
 ```{r}
 lost_test <- c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea")
@@ -305,10 +320,10 @@ for(lost in lost_nominal_test) {
 ```
 
 
-TransformaciÛn de datos
+Transformaci?n de datos
 =======================
 
-RegularizaciÛn de las variables continuas
+Regularizaci?n de las variables continuas
 -----------------------------------------
 
 ```{r}
@@ -336,7 +351,7 @@ feaures_to_normalize <- c("OverallQual", "OverallCond", "GareageArea", "MoSold")
 ```
 
 
-SelecciÛn de variables
+Selecci?n de variables
 ======================
 lm
 --------

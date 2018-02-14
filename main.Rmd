@@ -185,33 +185,34 @@ También observamos que en ambas variables los valores perdidos (8) forman parte
 ifelse(train$Id[is.na(train$MasVnrArea)] == train$Id[is.na(train$MasVnrType)], "Equals", "Non equals")
 ```
 
-Se elimina la caraterística *MasVnrArea* ya que las entradas con valor 0, por ser del tipo "None", hacen que la información desprendida de la variable esté "deformada".
+Por consiguiente, se elimina la caraterística *MasVnrArea*, ya que las entradas con valor 0, por ser del tipo "None", hacen que la información desprendida de la variable esté "deformada".
 
 ```{r}
-# TODO: cambiar la forma de eleminar las columnas para que no se parezca tanto
 train <- dplyr::select(train, -MasVnrArea)
 ```
 
-Observamos *MasVnrType* en relación a *SalePrice* para entender su distribución.
+Ahora se deben tratar los valores perdidos de *MasVnrType*. Para ello, observamos *MasVnrType* en relación a *SalePrice* para entender su distribución.
 
 ```{r}
 qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
 ```
 
-Asignamos a los valores perdidos el tipo "BrkFace", por mayor proximidad de sus medias. Aunque también se podría asignar "Stone".
+Asignamos a los valores perdidos el tipo "BrkFace", por mayor proximidad de sus medias. Aunque también se les podría asignar el tipo "Stone".
 
 ```{r}
 train$MasVnrType[is.na(train$MasVnrType)] <- "BrkFace"
 ```
 
+Finalmente, observamos la distribución resultante en las categorías de *MasVnrType* en relación a *SalePrice*.
+
 ```{r}
 qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
 ```
 
-Variables categ?ricas
----------------------
+## Variables categóricas
 
-Las siguientes caraterísticas contienen valores perdidos que representan la ausencia de la propiedad a la que representan. Por consiguiente, se le asignarán el tipo "None" a aquellos valores ausentes (NA). Dichas características son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
+
+Las siguientes caraterísticas con valores perdidos se corresponden con aquellas que contienen entradas en las que hay una ausencia de la propiedad a la que representan. Por ejemplo, la propiedad *PoolQC* representa la calidad de la piscina, pero es obvio que en aquellas propiedades en las haya una ausencia de piscina, será inviable representar su calidad. Por consiguiente, se le asignarán el tipo "None" a aquellos valores ausentes (NA). Las caracteríasticas que contienen este tipo de valores perdidos son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
 
 ```{r}
 none_types <-
@@ -245,26 +246,22 @@ none_types <-
 ```
 
 -Electrical-
-Un valor perdido. Se le asigna el tipo mayoritario.
+Esta característica presenta un valor perdido. Dada la mínima influencia que puede tener, se le asigna la categoría mayoritaria.
 
 ```{r}
 train$Electrical[is.na(train$Electrical)] <- names(sort(summary(train$Electrical), decreasing = T)[1])
 ```
 
-As? mismo, hay que eliminar la propiedad Id
+# Corrección de valores perdidos en el conjunto de test
 
-```{r}
-train <- dplyr::select(train, -Id)
-```
-
-Correcci?n de valores perdidos en el conjunto de test
-=====================================================
+En primer lugar, se examinan los valores perdidos que presenta el conjunto de test y se visualizan de la misma forma que se procedió con el conjunto de entrenamiento.
 
 ```{r}
 na_info_test <- apply(is.na(test), 2, sum)
 lost_values_info_test <- which(na_info_test > 0)
 filtered_lost_values_info_test <- na_info_test[lost_values_info_test]
 df_filtered_lost_values_info_test <- data.frame(filtered_lost_values_info_test)
+
 # TODO: Change and add a histogram
 ggplot() + 
   geom_point(aes(x = rownames(df_filtered_lost_values_info_test), y = df_filtered_lost_values_info_test$filtered_lost_values_info_test)) +
@@ -276,7 +273,7 @@ ggplot() +
   ylab('Number of lost values')
 ```
 
-Mismas transformaciones que en el conjunto de entrenamiento
+En las caraterísticas que presenten valores perdidos y ya se haya examinado previamente, se procede a tratar de la misma forma para realizar un procedimiento consistente.
 
 ```{r}
   for (none in none_types) {
@@ -294,11 +291,9 @@ test$GarageYrBlt[is.na(test$GarageYrBlt)] <- test$YearBuilt[is.na(test$GarageYrB
 test$LotFrontage[is.na(test$LotFrontage)] <- median(test$LotFrontage[!is.na(test$LotFrontage)])
 test <- dplyr::select(test, -MasVnrArea)
 test$MasVnrType[is.na(test$MasVnrType)] <- "Stone"
-
-test <- dplyr::select(test, -Id)
 ```
 
-Ahora las dem?s variables que sean num?ricas (se les asigna la mediana)
+Así mismo, se procede a tratar las demás variables. Por una parte, se procesan las de tipo numérico asignando la mediana a los valores faltantes.
 
 ```{r}
 lost_test <- c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea")
@@ -308,8 +303,7 @@ for(lost in lost_test) {
 }
 ```
 
-
-Ahora las nominales (se les asigna la moda)
+En cuanto a las variables de tipo nominal, se les asigna la moda de sus valores.
 
 ```{r}
 lost_nominal_test <- c("Exterior1st", "Exterior2nd", "Functional", "KitchenQual", "MSZoning", "SaleType", "Utilities")
@@ -319,9 +313,14 @@ for(lost in lost_nominal_test) {
 }
 ```
 
+# Transformación de datos
 
-Transformaci?n de datos
-=======================
+En primer lugar, se procede a eliminar la propiedad Id de los conjuntos de entrenamiento y test
+
+```{r}
+train <- dplyr::select(train, -Id)
+test <- dplyr::select(test, -Id)
+```
 
 Regularizaci?n de las variables continuas
 -----------------------------------------

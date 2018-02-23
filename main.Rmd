@@ -315,19 +315,18 @@ for(lost in lost_nominal_test) {
 
 # Transformación de datos
 
-En primer lugar, se procede a eliminar la propiedad Id de los conjuntos de entrenamiento y test
+En primer lugar, se procede a eliminar la propiedad Id de los conjuntos de entrenamiento y test.
 
 ```{r}
-train <- dplyr::select(train, -Id)
-test <- dplyr::select(test, -Id)
+transformed_train <- dplyr::select(train, -Id)
+transformed_test <- dplyr::select(test, -Id)
 ```
 
-Regularizaci?n de las variables continuas
------------------------------------------
+## Regularización de las variables continuas
+
+Tal y como se ha explicado, 
 
 ```{r}
-transformed_train <- train
-transformed_test <- test
 transformed_train$SalePrice <- log(transformed_train$SalePrice)
 
 for (feature in names(transformed_train)) {

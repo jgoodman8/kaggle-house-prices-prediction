@@ -3,3 +3,6 @@
 .RData
 .Ruserdata
 .vs
+main_files
+*.Rproj
+*.md

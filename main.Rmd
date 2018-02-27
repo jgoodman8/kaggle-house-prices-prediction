@@ -358,7 +358,7 @@ Let's normalize the continuous values
 features_to_center <- c("MSSubClass", "LotFrontage", "LotArea", "BsmtFinSF1", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "BsmtFullBath", "BsmtHalfBath", "WoodDeckSF", "OpenPorchSF", "EnclosedPorch", "X3SsnPorch", "ScreenPorch", "PoolArea", "MiscVal")
 feaures_to_normalize <- c("OverallQual", "OverallCond", "GareageArea", "MoSold")
 
-train_pre_processed_values <- predict(caret::preProcess(transformed_train[, - 79], method = c("center")), transformed_train)
+train_pre_processed_values <- predict(caret::preProcess(transformed_train[, - ncol(transformed_train)], method = c("center", "scale")), transformed_train)
 test_pre_processed_values <- predict(caret::preProcess(transformed_test, method = c("center", "scale")), transformed_test)
 ```
 
@@ -367,7 +367,8 @@ test_pre_processed_values <- predict(caret::preProcess(transformed_test, method 
 - PCA
 
 ```{r}
-train_pre_processed_values <- predict(caret::preProcess(train_pre_processed_values[, - 79], method = c("pca")), newdata = train_pre_processed_values)
+pca_train.processed <- predict(caret::preProcess(train_pre_processed_values[, - ncol(transformed_train)], method = c("pca")), newdata = train_pre_processed_values)
+pca_test.processed <- predict(caret::preProcess(test_pre_processed_values, method = c("pca")), newdata = test_pre_processed_values)
 
 qplot(train_pre_processed_values)
 ```
@@ -392,19 +393,32 @@ names(train_set) <- selected_features
 
 ## Entrenamiento
 
-- svmRadial
-
 ```{r}
 set.seed(12345)
 model <- caret::train(SalePrice ~ .,
   data = train_pre_processed_values,
-  method = 'svmRadial',
+  method = 'xgbLinear', # svmRadial # xgbLinear # glmnet #svmLinear2
   trControl = caret::trainControl(
   method = 'repeatedcv',
   number = 10,
   repeats = 1
   ))
 
+model
+```
+
+- Model evaluation
+
+```{r} 
+train_predict <- stats::predict(model, train_pre_processed_values)
+ggplot2::qplot(x = exp(train_predict), y = exp(train_pre_processed_values$SalePrice),
+               geom = c("point", "smooth"), method = "lm",
+               xlab = "Paredicted", ylab = "Real")
+```
+
+## Prediction
+
+```{r}
 test_predict <- stats::predict(model, test_pre_processed_values)
 ```
 
@@ -413,7 +427,7 @@ test_predict <- stats::predict(model, test_pre_processed_values)
 ```{r}
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(test_predict))
 colnames(prediction.table)[2] <- "SalePrice"
-write.csv(prediction.table, paste0('svmRadial4', "_predictions", ".csv"), row.names = F)
+write.csv(prediction.table, paste0('svmLinear2_1', "_predictions", ".csv"), row.names = F)
 ```
 
 

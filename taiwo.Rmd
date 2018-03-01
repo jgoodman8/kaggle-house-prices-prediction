@@ -1,0 +1,701 @@
+---
+  title: "<center><h1>House Price Prediction: Stacking[Top 15% LB]</h1></center>"
+author: "Taiwo"
+date: "Jan 13, 2018"
+output: 
+  html_document: default
+pdf_document: default
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+There have been a lot of great exploratory data analysis and machine learning kernels for this dataset, most common being exploratory analysis and thorough features engeneering, with most being for python users.i thought i should do this for R users, therefore this kernel will focus more on machine learning. 
+
+Here are some great notebooks, to name a few:
+  
+  * <a href="https://www.kaggle.com/juliencs/a-study-on-regression-applied-to-the-ames-dataset"> A study on Regression applied to the Ames dataset</a>  by Julien Cohen-Solal
+* <a href="https://www.kaggle.com/juliencs/a-study-on-regression-applied-to-the-ames-dataset"> Detailed data analysis and ensemble modelling </a> by Tanner Carbonati 
+* <a href="https://www.kaggle.com/serigne/stacked-regressions-top-4-on-leaderboard"> Stacked Regressions : Top 4% on LeaderBoard </a> by Serigne
+
+This kernel takes a Stacking models approach which involves training with 3 level 0 Models(Support Vector Regressor, XGBoost and Generalized Boosted Regression Modelling[GBM]) and stacking with a level 1 model(Lasso) also known as meta model. Additional information about stacking (Spliting Dataset and Training) can be found at the later part of <a href="https://www.kaggle.com/serigne/stacked-regressions-top-4-on-leaderboard">Serigne</a> kernel. 
+
+Shall we begin!
+  
+```{r, warning=FALSE, message=FALSE}
+#load libraries
+require(ggplot2) 
+require(stringr) 
+require(plyr) 
+require(glmnet) 
+require(xgboost) 
+require(e1071)
+require(dplyr) 
+require(caret) 
+require(moments) 
+require(MASS)
+require(corrplot) 
+require(ggthemes)
+require(plotly)
+require(Amelia)
+require(gbm)
+require(gridExtra)
+```
+
+
+# Data Preparation
+```{r, warning=FALSE, message=FALSE}
+# import the data set
+train <- read.csv('train.csv', stringsAsFactors = F) 
+test <- read.csv('test.csv', stringsAsFactors = F)
+```
+
+## Handling Outliers
+Outliers can be disruptive to our ability to predict accurately. Lets explore some and remove
+```{r, warning=FALSE, message=FALSE}
+### GrLivArea
+#ggplot(train, aes(GrLivArea))+
+#  geom_histogram(fill='light green',color='black')+
+#  theme_grey()
+# By Eye
+train <- train[-which(train$GrLivArea > 4000),] # 4 in train
+
+### TotalBsmtSF
+#ggplot(train, aes(TotalBsmtSF))+
+#  geom_histogram(fill='light green',color='black')+
+#  theme_grey()
+outlier <- 3000 # By Eye
+train <- train[-which(train$TotalBsmtSF> outlier),] # 3 in train
+
+### LotArea
+#ggplot(train, aes(LotArea))+
+#  geom_histogram(fill='light green',color='black')+
+#  theme_grey()
+outlier <- 100000  
+train <- train[-which(train$LotArea>outlier),]   # 4 in train
+
+# LotFrontage
+#ggplot(train, aes(LotFrontage))+
+#  geom_histogram(fill='light green',color='black')+
+#  theme_grey()
+outlier <- 200 
+train <- train[-which(train$LotFrontage>outlier),]   # 1 in train
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## Id's of training observations that fail to fit
+outlier.Id <- c(633, 1325, 463, 971, 689)
+id <- train$Id %in% outlier.Id
+train <- train[!id, ]
+```
+
+## Target Variable
+we take log transformation of SalePrice here because the variable is rightly skewed, therefore transforming it to be normally distributed. check above kernels for details and visualisation.
+```{r}
+# TARGET VARIABLE
+outcome <- log(train$SalePrice+1) 
+
+```
+
+```{r}
+# combine the train and test
+train <- train %>% within(rm('SalePrice'))
+df <- rbind(train,test) %>% within(rm('Id'))
+```
+
+## Handling missing values
+
+```{r, warning=FALSE, message=FALSE}
+#missmap(df, col = c('yellow','black'), legend = F, main= 'Missing   Values')
+#check for columns with missing values
+na.cols <- which(colSums(is.na(df)) > 0)
+na.cols <- sort(colSums(sapply(df[na.cols], is.na)), decreasing = TRUE)
+paste('There are', length(na.cols), 'columns with missing values')
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Dealing with missing Values
+
+# pool QC : Replacce na values with none
+df$PoolQC[is.na(df$PoolQC)] <- "None"
+
+# MiscFfeature
+df$MiscFeature[is.na(df$MiscFeature)] <- 'None'
+
+# Fence
+df$Fence[is.na(df$Fence)] <- "None"
+
+# Alley
+df$Alley[is.na(df$Alley)] <- "None"
+
+
+# Fire Place Qu
+df$FireplaceQu[is.na(df$FireplaceQu)] <- 'None'
+
+# LotFrontage
+# LotFrontage of all the neighborhood
+lot.f = aggregate(LotFrontage ~ Neighborhood, data = df, median)
+lot.f2 = c()
+for (str in df$Neighborhood[is.na(df$LotFrontage)]) {
+  lot.f2 = c(lot.f2, which(lot.f$Neighborhood == str))
+}
+df$LotFrontage[is.na(df$LotFrontage)] = lot.f[lot.f2, 2]
+
+
+# Garage
+gar.cols <- c('GarageCond','GarageQual','GarageType','GarageFinish')
+for (x in gar.cols){
+  df[x][is.na(df[x])] <- 'None'
+}
+
+for(col in c('GarageYrBlt','GarageArea','GarageCars')){
+  df[col][is.na(df[col])] <- 0
+}
+
+
+# Basement category feature                
+for(i in c('BsmtExposure', 'BsmtCond','BsmtQual','BsmtFinType2', 'BsmtFinType1')){
+  df[i][is.na(df[i])] <- 'None'
+}
+
+# Basement Numeric feature
+for(i in c('BsmtFinSF1','BsmtFinSF2','BsmtUnfSF','TotalBsmtSF','BsmtFullBath',
+           'BsmtHalfBath')){
+  df[i][is.na(df[i])] <- 0
+}
+
+# massVnr Type
+df$MasVnrType[is.na(df$MasVnrType)] <- 'None'
+
+# massVnr Area
+df$MasVnrArea[is.na(df$MasVnrArea)] <- 0
+
+# MS zoning
+df$MSZoning[is.na(df$MSZoning)] <- 'RL'
+
+# Utilities
+# remove utilities
+df <- df[,!names(df) %in% c('Utilities')]
+
+# Functional
+df$Functional[is.na(df$Functional)] <- 'Typ'
+
+# Electrical
+# Replace NA with most Common
+df$Electrical[is.na(df$Electrical)] <- 'SBrkr'
+
+# Kitchen Qual
+df$KitchenQual[is.na(df$KitchenQual)] <- 'TA' # most common
+
+# Exterior
+# Replace Na with most common occurence
+for(i in c('Exterior1st', 'Exterior2nd')){
+  df[i][is.na(df[i])] <- 'VinylSd'
+}
+
+# Sale Type
+# Replace with most common
+df$SaleType[is.na(df$SaleType)] <- 'WD'
+
+# MSScubClass
+df$MSSubClass[is.na(df$MSSubClass)] <- 'None'
+
+# Final Check
+any(is.na(df))
+
+```
+
+# Feature Engineering
+```{r}
+# Transform Numerical to categorical variables
+# Yr Sold
+df$YrSold <- as.character(df$YrSold)
+
+# Mo Sold
+df$MoSold <- as.character(df$MoSold)
+
+# Overall COnd
+df$OverallCond <- as.character(df$OverallCond)
+```
+```{r}
+# Encoding Categories
+
+# function that maps a category value to its corresponding numeric value and returns that column to the data frame
+map_categories <- function(columns, categories, dataset){
+  for (col in columns){
+    dataset[col] <- as.numeric(categories[dataset[,col]])
+  }
+  return(dataset)
+}
+
+####
+qual.cols <- c('ExterQual', 'ExterCond', 'GarageQual', 'GarageCond', 'FireplaceQu',
+               'KitchenQual', 'HeatingQC', 'BsmtQual')
+qual.list <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+df <- map_categories(qual.cols, qual.list, df)
+
+#BsmtEXposure
+bsmt.list <- c('None' = 0, 'No' = 1, 'Mn' = 2, 'Av' = 3, 'Gd' = 4)
+df = map_categories(c('BsmtExposure'), bsmt.list, df)
+
+# Bsmt Fin Type 1 & 2
+bsmt.fin.list <- c('None' = 0, 'Unf' = 1, 'LwQ' = 2,'Rec'= 3, 'BLQ' = 4, 'ALQ' = 5,
+                   'GLQ' = 6)
+df <- map_categories(c('BsmtFinType1','BsmtFinType2'), bsmt.fin.list, df)
+
+#Functional
+functional.list <- c('None' = 0, 'Sal' = 1, 'Sev' = 2, 'Maj2' = 3, 'Maj1' = 4,
+                     'Mod' = 5, 'Min2' = 6, 'Min1' = 7, 'Typ'= 8)
+df$Functional <- as.numeric(functional.list[df$Functional])
+
+# Garage Finish
+garage.fin.list <- c('None' = 0,'Unf' = 1, 'RFn' = 1, 'Fin' = 2)
+df$GarageFinish <- as.numeric(garage.fin.list[df$GarageFinish])
+
+# Fence
+fence.list <- c('None' = 0, 'MnWw' = 1, 'GdWo' = 1, 'MnPrv' = 2, 'GdPrv' = 4)
+df$Fence <- as.numeric(fence.list[df$Fence])
+
+# Neighborhood
+nbrh.map <- c('MeadowV' = 0, 'IDOTRR' = 1, 'Sawyer' = 1, 'BrDale' = 1, 'OldTown'= 1,
+              'Edwards' = 1, 'BrkSide' = 1, 'Blueste' = 1, 'SWISU' = 2, 'NAmes' = 2,
+              'NPkVill' = 2, 'Mitchel' = 2,'SawyerW' = 2, 'Gilbert' = 2, 'NWAmes'=2,
+              'Blmngtn' = 2, 'CollgCr' = 2, 'ClearCr' = 3,'Crawfor' =3, 'Veenker'=3,
+              'Somerst' = 3, 'Timber' = 3, 'StoneBr' = 4, 'NoRidge'= 4,'NridgHt' =4)
+df$NeighborhoodBin <- as.numeric(nbrh.map[df$Neighborhood])
+df$NeighorbodBin2 <- (nbrh.map[df$Neighborhood])
+
+MSdwelling.list <- c('20' = 1, '30'= 0, '40' = 0, '45' = 0,'50' = 0, '60' = 1, '70' = 0, '75' = 0, '80' = 0, '85' = 0, '90' = 0, '120' = 1, '150' = 0, '160' = 0, '180' = 0, '190' = 0)
+
+df$NewerDwelling <- as.numeric(MSdwelling.list[as.character(df$MSSubClass)])
+
+# creating extra variables
+df$RegularLotShape <- (df$LotShape == 'Reg') * 1
+df$LandLeveled <- (df$LandContour == 'Lvl') * 1
+df$LandSlopeGentle <- (df$LandSlope == 'Gtl') * 1
+df$ElectricalSB <- (df$Electrical == 'SBrkr') * 1
+df$GarageDetchd <- (df$GarageType == 'Detchd') * 1
+df$HasPavedDrive <- (df$PavedDrive == 'Y') * 1
+df$HasWoodDeck <- (df$WoodDeckSF > 0) * 1
+df$Has2ndFlr <- (df$X2ndFlrSF > 0) * 1
+df$HasMasVnr <- (df$MasVnrArea > 0) * 1
+df$HasShed <- (df$MiscFeature == 'Shed') * 1
+df$Remodeled <- (df$YearBuilt != df$YearRemodAdd) * 1
+df$RecentRemodel <- (df$YearRemodAdd >= as.numeric(df$YrSold)) * 1
+df$NewHouse <- (df$YearBuilt == as.numeric(df$YrSold)) * 1
+df$HighSeason <- (df$MoSold %in% c(5,6,7)) * 1
+
+# add new important numeric variables
+df$AreaInside <- as.numeric(df$X1stFlrSF + df$X2ndFlrSF)
+df$HouseAge <- as.numeric(2010 - (df$YearBuilt))
+df$TimeSinceSold <- as.numeric(2010 - as.numeric(df$YrSold))
+df$YrSinceRemodel <- as.numeric(as.numeric(df$YrSold) - df$YearRemodAdd)
+df$TotalSF <- as.numeric(df$TotalBsmtSF + df$X1stFlrSF + df$X2ndFlrSF)
+df$AllSF <- as.numeric(df$TotalBsmtSF + df$GrLivArea)
+df$OverallGrd <- as.numeric(df$OverallQual * as.numeric(df$OverallCond))
+df$ExterGrade <- as.numeric(df$ExterQual * df$ExterCond)
+df$GarageScore <- as.numeric(df$GarageArea * as.numeric(df$GarageQual))
+df$TotalBath <- as.numeric(df$BsmtFullBath+df$BsmtHalfBath +df$FullBath +df$HalfBath)
+
+# Encoding overall cond and yrsold
+# overall Cond
+oc.list <- c('1' = 1, '2'= 1, '3' = 1, '4' = 2,'5' = 2, '6' = 2, '7' = 3, '8' = 3,
+             '9' = 3)
+df$SimpleOverallCond <- as.numeric(oc.list[df$OverallCond])
+
+# Year sold
+yr.list <- c('2006' = 0, '2007'= 1, '2008' = 2, '2009' = 3,'2010' = 4)
+df$YrSold<- as.numeric(yr.list[df$YrSold])
+
+s.list <- c('Abnorml'=1,'Alloca'=1,'AdjLand'= 1,'Family'= 1,'Normal'= 0,'Partial'=0)
+sa.list <- c('Abnorml'=0,'Alloca'=0,'AdjLand'= 0,'Family'= 0,'Normal'= 0,'Partial'=1)
+df$SaleCondition_PriceDown <- as.numeric(s.list[df$SaleCondition])
+
+
+```
+# Finding Correlation
+```{r, warning=FALSE,message=FALSE}
+# get numeric columns
+corr.df <- cbind(df[1:1443,], SalePrice = outcome)
+
+num.cols <- sapply(corr.df,is.numeric)
+corr <- corr.df[,num.cols] %>% cor()
+
+# only want the columns that show strong correlations with SalePrice
+corr.SalePrice <- as.matrix(sort(corr[,'SalePrice'], decreasing = TRUE))
+corr.idx <- names(which(apply(corr.SalePrice, 1, function(x) (x > 0.5 | x < -0.5))))
+
+### Visuals
+# corrplot(as.matrix(corr[corr.idx,corr.idx]), type = 'upper', method='color', addCoef.col = 'black', tl.cex = .7,cl.cex = .7, number.cex=.7)
+
+```
+
+# Skewness and One Hot Encoding
+```{r}
+# SKEWNESS
+# first get data type for each feature
+feature_classes <- sapply(names(df), function(x) {
+  class(df[[x]])
+})
+numeric_feats <- names(feature_classes[feature_classes != "character"])
+df_numeric <- df[,numeric_feats]
+
+# transform any skewed data into normal
+skewed <- apply(df_numeric, 2, skewness)
+skewed <-skewed[abs(skewed) > 0.75] 
+
+## Transform skewed features with boxcox or log transformation
+for (x in names(skewed)) {
+  
+  df_numeric[[x]] <- log(df_numeric[[x]] + 1)
+}
+# normalize the data
+scaler <- preProcess(df_numeric)
+df_numeric <- predict(scaler, df_numeric)
+
+
+# ONE HOT ENCODING FOR CATEGORICAL VARIABLES
+# get names of categorical features
+categorical_feats <- names(feature_classes[feature_classes == "character"])
+df.categories <- df[,categorical_feats] 
+
+# one hot encoding for categorical data
+library(caret)
+dummy <- dummyVars(" ~ .",data=df.categories)
+df.categoric <- data.frame(predict(dummy,newdata=df.categories))
+
+###
+df <- cbind(df_numeric, df.categoric)
+paste('The dataframe has', dim(df)[1], 'rows and', dim(df)[2], 'columns')
+
+```
+
+## Near Zero Variance
+Some of the features and dummy variables we engineer might not give our modelling any good read which may cause over fitting or will prevent our model from generalizing over the data, these variables are known as **zero-variance predictors**. Find more details here <a href="https://tgmstat.wordpress.com/2014/03/06/near-zero-variance-predictors"> Near-zero variance predictors. Should we remove them?</a>
+  
+  ```{r}
+#library(caret)
+# check for near-zero variance
+nzv.data <- nearZeroVar(df, saveMetrics = TRUE)
+# take any of the near-zero-variance perdictors
+drop.cols <- rownames(nzv.data)[nzv.data$nzv == TRUE]
+
+df <- df[,!names(df) %in% drop.cols]
+
+paste('The dataframe now has', dim(df)[1], 'rows and', dim(df)[2], 'columns')
+```
+
+
+Data is ready for modelling
+```{r}
+# Split the data set
+df_train <- df[1:1443,]
+df_test <- df[1444:nrow(df),]
+
+trainSparse <- sparse.model.matrix(~. , data = df_train)[,-1]
+testSparse <- sparse.model.matrix(~., data = df_test)[,-1]
+
+```
+
+# MODELLING
+
+Firstly, we are going to explore our base models and test how they peform on the training set. From grid search and parameters tuning, we set our model parameters.
+```{r, warning=FALSE, message=FALSE}
+## Model parameters
+# XGBoost
+paramxgb <- list(booster = "gbtree",
+                 eval_metric = "rmse",
+                 eta = 0.03125,
+                 colsample_bytree = 0.2,
+                 max_depth = 4,
+                 min_child_weight = 4,
+                 gamma = 0.01,
+                 alpha = 0.9,
+                 lambda = 0.8,
+                 subsample = 0.5,
+                 silent = TRUE)
+
+# SVR
+paramsvr <- list(gamma = 1e-4, cost = 1000, epsilon = 0.001)
+
+# GBM
+paramgbm <- list(shrinkage = 0.1, interaction.depth = 3, n.minobsinnode = 10)
+
+```
+
+Let's Explore
+```{r, warning=FALSE, message=FALSE, results='hide'}
+# SVR
+
+# Model fit
+mod.svm <- svm(x = as.matrix(trainSparse), y = outcome, type = "eps-regression",
+kernel = "radial",cost = paramsvr[2], gamma = paramsvr[1], 
+epsilon = paramsvr[3])
+
+# Predict on test set 
+pred.svr <- predict(mod.svm, newdata = as.matrix(testSparse))
+
+#############################
+# XGBoost
+dtrain <- xgb.DMatrix(trainSparse, label = outcome)
+dtest <- xgb.DMatrix(testSparse)
+set.seed(1235)
+mod.xgb <- xgboost(data=dtrain,params = paramxgb, nrounds=1660,print_every_n = 200)
+# Predict on test set
+predTest.xgb <- predict(mod.xgb, newdata = dtest)
+
+# Feature importances
+importance <- xgb.importance(feature_names = trainSparse@Dimnames[[2]], model = mod.xgb)
+xgb.ggplot.importance(importance[1:20])
+
+
+#############################
+# GBM
+# Final Model fit
+mod.gbm <- gbm.fit(x = as.matrix(trainSparse), y = outcome, n.trees = 150,
+shrinkage = 0.1 ,interaction.depth = 3, n.minobsinnode = 10,
+distribution = "gaussian",bag.fraction = 0.5)
+
+# Predict
+pred.gbm <- predict(mod.gbm, newdata = as.matrix(testSparse), n.trees = 150)
+
+```
+
+## TRAIN MODEL 
+Here we create Splits Folds(5 folds, 4 as training fold and 1 as holdout), we fit our base models to it, to get the out-of-fold predictions, also create dataframe to save the out of fold predictions. lastly we create base model functions to train the folds.
+
+```{r, warning=FALSE, message=FALSE}
+# Number of models and folds
+nModels <- 3 # xgb, svr, gbm
+nfolds <- 5
+
+set.seed(1235)
+folds <- createFolds(outcome, k = nfolds)
+# Separate the folds for training and holdout
+foldsTrain <- folds[1:(nfolds-1)]
+foldsHoldOut <- folds[nfolds]
+
+# Actual Folds
+nActualFolds <- nfolds - 1 # training 0n 4 folds
+
+# create table for out-of-fold predictions
+nrowF <- length(unlist(foldsTrain))
+x_fold <- matrix(0, nrow = nrowF, ncol = 4)  
+y_fold <- data.frame(Id = 0, ActualSalePrice = 0) 
+Id.train <- 1:1443
+
+# SVR Function for training
+trainSVR <- function(inTrain, inPred, param){
+# Separate into training and prediction sets
+Xtr <- as.matrix(trainSparse)[inTrain, ]
+Xpred <- as.matrix(trainSparse)[inPred, ]
+
+mod.svr <- svm(x = Xtr, y = outcome[inTrain], type = "eps-regression", 
+kernel = "radial",cost = param[2], gamma = param[1], 
+epsilon = param[3], scale = FALSE)
+
+# Predict 
+pred <- predict(mod.svr, newdata = Xpred)
+return(pred)
+}
+
+# Xgboost Function for training 
+trainXGB <- function(inTrain, inPred, param, nrounds){
+# Separate into training and prediction sets
+Xtr <- trainSparse[inTrain, ]
+Xpred <- trainSparse[inPred, ]
+# xgb style matrices
+dXtr <- xgb.DMatrix(Xtr, label = outcome[inTrain])
+dXpred <- xgb.DMatrix(Xpred, label = outcome[inPred])
+# Model fit
+mod.xgb <- xgboost(data=dXtr, params = param, nrounds = nrounds, verbose = 0)
+# Predict 
+pred <- predict(mod.xgb, newdata = dXpred)
+return(pred)
+}
+# Function for training 
+trainGBM <- function(inTrain, inPred, param, n.tree){
+# Separate into training and prediction sets
+Xtr <- as.matrix(trainSparse[inTrain, ])
+Xpred <- as.matrix(trainSparse[inPred, ])
+
+# Model fit
+mod.gbm <- gbm.fit(x = Xtr, y = outcome[inTrain], n.trees = n.tree,
+shrinkage = param[1] ,bag.fraction = 0.5,
+interaction.depth = param[2], 
+n.minobsinnode =  10, distribution = "gaussian")
+
+# Predict 
+pred <- predict(mod.gbm, newdata = as.matrix(Xpred), n.trees = n.tree)
+return(pred)
+}
+```
+
+Result from training : Prediction of base models and actual saleprice
+```{r, warning=FALSE, results='hide'}
+# Loop over folds to create out-of-sample predictions
+start <- 1; end <- 1
+for (i in 1:nActualFolds){
+
+inTrain <- unlist(foldsTrain[-i]) # training fold
+inPred <- unlist(foldsTrain[i]) # test fold
+
+# XGBoost 
+predMod1 <- trainXGB(inTrain, inPred, paramxgb, nrounds = 1660)
+
+# SVR 
+predMod2 <- trainSVR(inTrain, inPred, paramsvr)
+
+# GBM
+predMod3 <- trainGBM(inTrain, inPred, paramgbm, n.tree = 150)
+
+# Save out of fold predictions 
+end <- (start - 1) + length(inPred)
+x_fold[start:end, 1] <- Id.train[inPred] # Save Ids
+x_fold[start:end, 2] <- predMod1 # Save predictions from XGB
+x_fold[start:end, 3] <- predMod2 # Save predictions from SVR
+x_fold[start:end, 4] <- predMod3 # Save predictions from GBM
+
+# Save corresponding actual outcomes: Y_fold
+y_fold[start:end, 1] <- Id.train[inPred] # Save Ids
+y_fold[start:end, 2] <- outcome[inPred] # Save outcomes
+
+# Increase start
+start <- start + length(inPred)
+}
+# Save in data frame
+trainOOF <- as.data.frame(x_fold)
+colnames(trainOOF) <- c("Id", "predXGB", "predSVR", "predGBM")
+y_fold <- mutate(y_fold, Id = as.integer(Id))
+trainOOF <- trainOOF %>% mutate(Id = as.integer(Id)) %>% left_join(y_fold, by = "Id")
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+head(trainOOF)
+```
+
+Now, Let's train the out of fold predictions with our meta model(glmnet).let's create a function to use the best alpha and lambda parameters to train.
+
+```{r, warning=FALSE, message=FALSE}
+## Functions for meta model
+trainLevel2 <- function(trainOOF, testOOF, cvfolds, lFinalFit = FALSE){
+# By cross validation, train Ridge Regression model
+Xtr <- trainOOF[,-c(1,5)]
+
+# Values of alpha
+alpha_values = c(0, 1e-6, 1e-5, 1e-4, 1e-3, 0.01, 0.1, 1)
+cv.results <- data.frame(alpha = alpha_values, lambda = 0, rmse = 0)
+for (ial in 1:length(alpha_values)){
+set.seed(101)
+mod.cv <- cv.glmnet(x = as.matrix(Xtr), y = trainOOF$ActualSalePrice, 
+nfolds = cvfolds, type.measure = "mse",alpha =alpha_values[ial])
+
+# Determine lambda
+lam <- mod.cv$lambda.min; ind.lam <- which(mod.cv$lambda == lam) 
+
+# Store CV results
+cv.results[ial, ]$lambda <- mod.cv$lambda.min
+cv.results[ial, ]$rmse <- sqrt( mod.cv$cvm[ind.lam])
+}
+
+# Best model
+ind.best <- which.min(cv.results$rmse)
+alBest <- cv.results[ind.best, 1]
+lamBest <- cv.results[ind.best, 2]
+
+# In Final Fit, the outcomes of testOOS are unknown 
+if (lFinalFit == TRUE){ 
+Xts <- testOOF[,-1]
+} else{
+Xts <- testOOF[,-c(1,5)]
+}
+# Train and predict
+mod.level2 <- glmnet(x = as.matrix(Xtr), y = trainOOF$ActualSalePrice, lambda = lamBest, alpha = alBest) 
+pred <- predict(mod.level2, newx = as.matrix(Xts))
+return(pred)
+}
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results='hide'}
+lStackVerify = TRUE
+# Function for creating stack folds
+createStacks <- function(nfolds, lStackVerify){
+set.seed(1235)
+folds <- createFolds(outcome, k = nfolds)
+
+if (lStackVerify == TRUE){
+# Separate the folds for training and holdout
+foldsTrain <- folds[1:(nfolds-1)]
+foldsHoldOut <- folds[nfolds]
+# Return the list of folds
+list(foldsTrain, foldsHoldOut)  
+} else{
+folds
+}
+}  
+
+if(lStackVerify == TRUE){
+listFolds <- createStacks(nfolds, lStackVerify)
+foldsTrain <- listFolds[[1]]
+foldsHoldOut <- listFolds[[2]]
+
+# Predictions
+inTrain <- unlist(foldsTrain)
+inHoldOut <- unlist(foldsHoldOut)
+
+predXGB <- trainXGB(inTrain, inHoldOut, paramxgb, nrounds = 1660)
+predSVR <- trainSVR(inTrain, inHoldOut, paramsvr)
+predGBM <- trainGBM(inTrain, inHoldOut, paramgbm, n.tree = 150)
+
+# The HoldOut data frame to be used in Level2
+yHoldOut <- outcome[inHoldOut]
+trainHoldOut <- data.frame(Id = Id.train[inHoldOut], predXGB = predXGB, 
+predSVR = predSVR, predGBM = predGBM,
+ActualSalePrice = yHoldOut)
+
+# Now using the level2 model, predict on HoldOut data
+predStack <- trainLevel2(trainOOF, trainHoldOut, cvfolds = 5)
+
+# Calculate RMSE for each model and stacked model
+rmse1 <- sqrt( mean( (yHoldOut - predXGB)^2 ) )
+rmse2 <- sqrt( mean( (yHoldOut - predSVR)^2 ) )
+rmse3 <- sqrt( mean( (yHoldOut - predGBM)^2 ) )
+rmseStack <- sqrt( mean( (yHoldOut - predStack)^2 ) )
+}
+```
+
+
+```{r, warning=FALSE}
+cat("The rmse values are: Xgboost rmse:",rmse1, "Svr rmse:",rmse2,
+"GBM rmse:",rmse3,"Stack model:",rmseStack)
+```
+
+
+From the result, our stacked model provide the least rmse, which justify how approach of stacking and getting more accurate predictions. 
+
+Lastly, we combine the training fold and holdout fold to make the new training set (train.OOF) and combine the test set prediction from our base models to make the testing set (testOOF). Then train our meta model on the new training set (train.OOF) and predict on new test set (testOOF).
+
+```{r, warning=FALSE, message=FALSE}
+
+# combine the out-of-folds prediction
+train.OOF <- rbind(trainOOF,trainHoldOut)
+
+# Combine the test set prediction for base models
+testOOF <- data.frame(Id = 1461:2919, predXGB = predTest.xgb, predSVR = pred.svr,
+predGBM = pred.gbm)
+# Final Predict using meta model             
+pred.Stack <- trainLevel2(train.OOF, testOOF, cvfolds = 5, lFinalFit = TRUE)
+
+# Final Submission
+submission <- data.frame(Id = 1461:2919, SalePrice = exp(pred.Stack))
+colnames(submission) <- c("Id", "SalePrice")
+write.csv(submission,"stacked.csv",row.names = FALSE)
+
+```
+
+
+** Uncomment to see the visualisations**
+**if you find this kernel useful, please kindly upvote and reference it. thanks**

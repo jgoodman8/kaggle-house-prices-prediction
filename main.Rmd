@@ -401,7 +401,7 @@ model <- caret::train(SalePrice ~ .,
   trControl = caret::trainControl(
   method = 'repeatedcv',
   number = 10,
-  repeats = 1
+  repeats = 5
   ))
 
 model
@@ -416,6 +416,36 @@ ggplot2::qplot(x = exp(train_predict), y = exp(train_pre_processed_values$SalePr
                xlab = "Paredicted", ylab = "Real")
 ```
 
+- Variable importance
+
+```{r}
+model.variable.importance <- caret::varImp(model)
+ggplot2::ggplot(model.variable.importance) + geom_density()
+```
+
+```{r}
+best.predictor.importance.index <- model.variable.importance$importance %>% mutate(names = row.names(.)) %>% arrange(-Overall)
+
+best.predictor.importance.variables <- c("SalePrice", best.predictor.importance.index$names[1:10])
+```
+
+Trying to improve model ...
+
+```{r}
+best.predictor.importance.data <- train_pre_processed_values[, best.predictor.importance.variables]
+
+model <- caret::train(SalePrice ~ .,
+  data = best.predictor.importance.data,
+  method = 'xgbLinear', # svmRadial # xgbLinear # glmnet #svmLinear2
+  trControl = caret::trainControl(
+  method = 'repeatedcv',
+  number = 10,
+  repeats = 5
+  ))
+
+model
+```
+
 ## Prediction
 
 ```{r}
@@ -426,8 +456,7 @@ test_predict <- stats::predict(model, test_pre_processed_values)
 
 ```{r}
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(test_predict))
-colnames(prediction.table)[2] <- "SalePrice"
-write.csv(prediction.table, paste0('svmLinear2_1', "_predictions", ".csv"), row.names = F)
+write.csv(prediction.table, paste0('xgbLinear_top10variables', "_predictions", ".csv"), row.names = F)
 ```
 
 

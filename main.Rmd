@@ -14,7 +14,7 @@ Inspección de los datos
 -----------------------
 
 ```{r, echo=FALSE}
-required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost")
+required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
 if (length(new_packages)) install.packages(new_packages)
 # library(pls)
@@ -24,6 +24,8 @@ library(caret)
 library(kernlab)
 library(glmnet)
 library(xgboost)
+library(data.table)
+library(Metrics)
 
 train <- read.csv("train.csv")
 test <- read.csv("test.csv")
@@ -293,6 +295,7 @@ for (none in none_types) {
     }
 }
 
+test$GarageYrBlt[test$GarageYrBlt == 2207] <- 2007
 test$GarageYrBlt[is.na(test$GarageYrBlt)] <- test$YearBuilt[is.na(test$GarageYrBlt)]
 test$LotFrontage[is.na(test$LotFrontage)] <- median(test$LotFrontage[!is.na(test$LotFrontage)])
 test <- dplyr::select(test, - MasVnrArea)
@@ -335,6 +338,29 @@ transformed_train <- dplyr::select(train, - Id)
 transformed_test <- dplyr::select(test, - Id)
 ```
 
+# Tratamiento de outliers
+
+```{r}
+ggplot(transformed_train, aes(y = SalePrice, x = GrLivArea)) + ggtitle("With Outliers") + geom_point()
+ggplot(transformed_train, aes(y = log(SalePrice), x = log(GrLivArea))) + ggtitle("With Outliers (Log())") + geom_point()
+
+transformed_train[transformed_train$GrLivArea > 4000,]$GrLivArea <- mean(transformed_train$GrLivArea) %>% as.numeric
+ggplot(transformed_train, aes(y = SalePrice, x = GrLivArea)) + ggtitle("Without Outliers") + geom_point()
+```
+
+
+```{r}
+train.dt <- transformed_train
+test.dt <- cbind(transformed_test, SalePrice = as.integer(NA))
+full.dt <- data.table::rbindlist(list(train.dt, test.dt), use.names = F, fill = F)
+```
+
+- Creación de una nueva variable: Area total basement xd
+
+```{r}
+full.dt$TotalSF = full.dt$TotalBsmtSF + full.dt$X1stFlrSF + full.dt$X2ndFlrSF
+```
+
 ## Regularización de las variables continuas
 
 Tal y como se ha mostrado, la variable *SalePrice* contiene una distribución asimétrica. Por consiguiente, para evitar el efecto que los valores extremos puedan causar, se procede a aplicar logaritmos a los valores de la distribución. 
@@ -342,7 +368,7 @@ Tal y como se ha mostrado, la variable *SalePrice* contiene una distribución as
 Así mismo, se procede a mostrar diagramas de densidad de cada una de las características que contengan datos númericos. De esta forma se podrá observa que transformaciones pueden ser convenientes de hacer a cada variable.
 
 ```{r}
-transformed_train$SalePrice <- log(transformed_train$SalePrice)
+full.dt$SalePrice <- log(full.dt$SalePrice) # TODO: CHECK THIS :S
 
 for (feature in names(transformed_train)) {
     if (is.numeric(transformed_train[, feature])) {
@@ -356,225 +382,101 @@ for (feature in names(transformed_train)) {
 
 Let's normalize the continuous values
 ```{r}
-features_to_center <- c("MSSubClass", "LotFrontage", "LotArea", "BsmtFinSF1", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "BsmtFullBath", "BsmtHalfBath", "WoodDeckSF", "OpenPorchSF", "EnclosedPorch", "X3SsnPorch", "ScreenPorch", "PoolArea", "MiscVal")
-feaures.to.log <- c("SalePrice","OverallQual", "OverallCond", "GareageArea", "MoSold")
-
-train_pre_processed_values <- predict(caret::preProcess(transformed_train[, - ncol(transformed_train)], method = c("center", "scale")), transformed_train)
-test_pre_processed_values <- predict(caret::preProcess(transformed_test, method = c("center", "scale")), transformed_test)
-```
-
-```{r}
-transformed_train$GrLivArea <- log(transformed_train$GrLivArea)
-for (feature in names(transformed_train)) {
-    if (is.numeric(transformed_train[, feature])) {
-        print(ggplot2::ggplot(data = transformed_train, aes(x = transformed_train[, feature])) +
-                      geom_density() +
-                      xlab(feature))
-    }
-}
-```
-
-
-## INTENTANDO SACAR ALGO DE AQUÍ: https://www.kaggle.com/bwboerman/r-data-table-glmnet-xgboost-with-caret
-
-Creamos grupos de variables, según su tipo: variables de medidas, variables de recuento, variables de valor, categóricas.
-
-```{r}
-train.dt <- train
-test.dt <- cbind(test, SalePrice=as.integer(NA))
-full.dt <- rbindlist(list(train.dt, test.dt), use.names = F, fill = F)
-
 variablesSquareFootage <- c(
-  "LotFrontage",        ## Linear feet of street connected to property 
-  "LotArea",            ## Lot size in square feet
-  "BsmtFinSF1",       ## Type 1 finished square feet    
-  "BsmtFinSF2",       ## Type 2 finished square feet
-  "BsmtUnfSF",        ## Unfinished square feet of basement area
-  "TotalBsmtSF",        ## Total square feet of basement area
-  "X1stFlrSF",       ## First Floor square feet
-  "X2ndFlrSF",      ## Second floor square feet
-  "LowQualFinSF",   ## Low quality finished square feet (all floors)
-  "GrLivArea",        ## Above grade (ground) living area square feet
-  "GarageArea",     ## Size of garage in square feet
-  "WoodDeckSF",     ## Wood deck area in square feet
-  "OpenPorchSF",    ## Open porch area in square feet  
-  "EnclosedPorch",  ## Enclosed porch area in square feet 
-  "X3SsnPorch",  ## Three season porch area in square feet 
-  "ScreenPorch",    ## Screen porch area in square feet
-  "PoolArea"            ## Pool area in square feet
+  "LotFrontage", ## Linear feet of street connected to property 
+  "LotArea", ## Lot size in square feet
+  "BsmtFinSF1", ## Type 1 finished square feet    
+  "BsmtFinSF2", ## Type 2 finished square feet
+  "BsmtUnfSF", ## Unfinished square feet of basement area
+  "TotalBsmtSF", ## Total square feet of basement area
+  "X1stFlrSF", ## First Floor square feet
+  "X2ndFlrSF", ## Second floor square feet
+  "LowQualFinSF", ## Low quality finished square feet (all floors)
+  "GrLivArea", ## Above grade (ground) living area square feet
+  "GarageArea", ## Size of garage in square feet
+  "WoodDeckSF", ## Wood deck area in square feet
+  "OpenPorchSF", ## Open porch area in square feet  
+  "EnclosedPorch", ## Enclosed porch area in square feet 
+  "X3SsnPorch", ## Three season porch area in square feet 
+  "ScreenPorch", ## Screen porch area in square feet
+  "PoolArea" ## Pool area in square feet
 )
 
-variablesCounts <- c(
-  "BsmtFullBath",       ## Basement full bathrooms
-  "BsmtHalfBath",       ## Basement half bathrooms
-  "FullBath",             ## Full bathrooms above grade
-  "HalfBath",             ## Half baths above grade
-  "BedroomAbvGr",       ## Bedrooms above grade (does NOT include basement bedrooms)
-  "KitchenAbvGr",       ## Kitchens above grade
-  "TotRmsAbvGrd",       ## Total rooms above grade (does not include bathrooms)
-  "Fireplaces",       ## Number of fireplaces
-  "GarageCars"      ## Size of garage in car capacity
-)
-
-variablesValues <- c(
-  "MiscVal",        ## $ Value of miscellaneous feature
-  "SalePrice"       ## $ Price paid
-)
-
-variablesFactor <- colnames(full.dt)[which(as.vector(full.dt[,sapply(full.dt, class)]) == "character")]
-variablesFactor <- setdiff(variablesFactor, "dataPartition") 
-variablesFactor <- c(variablesFactor,
-                     ## variables with data type integer which are factors
-                     "MSSubClass",     ## Identifies the type of dwelling involved in the sale
-                     "OverallQual",    ## Rates the overall material and finish of the house
-                     "OverallCond"     ## Rates the overall condition of the house
-)
+full.dt[, variablesSquareFootage] <- log(1 + full.dt[, variablesSquareFootage, with = FALSE])
 ```
 
-- Skewed variables
-
 ```{r}
-skewedVariables <- sapply(full.dt[, c(variablesSquareFootage,variablesValues), with = FALSE],
-                          function(x){skew(x,na.rm=TRUE)}) ## including response variable
-## keep only features that exceed a threshold for skewness
-skewedVariables <- skewedVariables[skewedVariables > 0.50]
-## transform excessively skewed features with log1p
-skewedVariables <- names(skewedVariables)
-full.dt[, (skewedVariables) := lapply(.SD, function(x) log1p(x)), .SDcols = skewedVariables]
-```
+full.dt.processed <- predict(caret::preProcess(select(full.dt, - SalePrice),
+    method = c("center", "scale")), full.dt)
 
-- Scale....
-
-```{r}
-varScale <- setdiff(c(variablesSquareFootage, variablesValues), c("SalePrice")) ## Do not scale response
-full.dt[, (varScale) := lapply(.SD, function(x) scale(x, center = T, scale = T)), .SDcols = varScale]
-```
-
-- Ordinal factors
-
-```{r}
-changeColType <- setDT(data.frame(sapply(full.dt,is.ordered)), keep.rownames = TRUE)[sapply.full.dt..is.ordered.==TRUE]$rn
-full.dt[,(changeColType):= lapply(.SD, as.integer), .SDcols = changeColType]
+################## PARTITIONED ####################################
+# train_pre_processed_values <- predict(caret::preProcess(transformed_train[, - ncol(transformed_train)], method = c("center", "scale")), transformed_train)
+# test_pre_processed_values <- predict(caret::preProcess(transformed_test, method = c("center", "scale")), transformed_test)
 ```
 
 - Spliting into train and test
 
 ```{r}
-train.dt.processed <- full.dt[1:nrow(train.dt),]
-test.dt.processed <- full.dt[1:nrow(test.dt),]
+train.dt.processed <- full.dt.processed[1:nrow(train.dt),]
+test.dt.processed <- full.dt.processed[(nrow(train.dt) + 1):nrow(full.dt.processed),]
 test.dt.processed <- dplyr::select(test.dt.processed, - SalePrice)
 ```
 
 ### Selección de variables
 
-- PCA
-
-```{r}
-pca_train.processed <- predict(caret::preProcess(train_pre_processed_values[, - ncol(transformed_train)], method = c("pca")), newdata = train_pre_processed_values)
-pca_test.processed <- predict(caret::preProcess(test_pre_processed_values, method = c("pca")), newdata = test_pre_processed_values)
-
-qplot(train_pre_processed_values)
-```
-
 - lm
 
 ```{r}
-exploratory_lm = lm(SalePrice ~ ., data = train_pre_processed_values)
+exploratory_lm = lm(SalePrice ~ ., data = train.dt.processed)
 summary(exploratory_lm)
 
 # step_forward_stats <- olsrr::ols_step_forward(exploratory_lmstep_forward_stats)
 # plot(step_forward_stats)
 ```
 
+## Entrenamiento
+
 ```{r}
-train_set_selected <-transformed_train[, c("OverallQual", "GrLivArea", "YearBuilt", "OverallCond", "GarageCars", "TotalBsmtSF", "RoofMatl", "BsmtFinSF1", "Condition2", "LotFrontage", "SaleCondition", "Foundation", "KitchenAbvGr", "MSZoning", "SalePrice")]
-
-# selected_features <- c(step_forward_stats$predictors, "SalePrice")
-
-# names(train_set) <- selected_features
+in_train <- createDataPartition(train.dt.processed$SalePrice, p = 0.7, list = F)
+partial.train <- train.dt.processed[in_train,]
+validation <- train.dt.processed[-in_train,]
 ```
 
-## Entrenamiento
+- Entrenamiento "parcial"
 
 ```{r}
 set.seed(12345)
 model <- caret::train(SalePrice ~ .,
-  data = train.dt.processed,
-  method = 'xgbLinear', # svmRadial # xgbLinear # glmnet #svmLinear2
+  data = partial.train,
+  method = 'gbm', # svmRadial # xgbLinear # glmnet #svmLinear2
   trControl = caret::trainControl(
   method = 'repeatedcv',
   number = 10,
-  repeats = 5
+  repeats = 1
   ))
 
 model
 ```
 
-- Entrenamiento sofisticado
+- Validación del modelo
 
 ```{r}
-set.seed(12345)
-
-features <- setdiff(names(full.dt), c("SalePrice", "Id", "dataPartition"))
-
-treatplan <- vtreat::designTreatmentsZ(train.dt.processed, minFraction = 0.01, rareCount = 0, features, verbose = FALSE)
-train.full.treat <- prepare(treatplan, dframe = train.dt.processed, codeRestriction = c("clean", "lev"))
-test.treat  <- prepare(treatplan, dframe = test.dt.processed, codeRestriction = c("clean", "lev"))
-
-trControl <- trainControl(
-        method="cv",
-        number=7,
-        savePredictions="final",
-        index=createResample(train.dt.processed$OverallQual, 7),  
-        allowParallel =TRUE
-)
-xgbTreeGrid <- expand.grid(nrounds = 400, max_depth = 3, eta = 0.1, gamma = 0, colsample_bytree = 1.0,  subsample = 1.0, min_child_weight = 4)
-glmnetGridElastic <- expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
-glmnetGridLasso <- expand.grid(.alpha = 1, .lambda = seq(0.001,0.1,by = 0.001))
-glmnetGridRidge <- expand.grid(.alpha = 0, .lambda = seq(0.001,0.1,by = 0.001))
-set.seed(333)
-modelList <<- caretEnsemble::caretList(
-                  x = train.full.treat,
-                  y = train.dt.processed$SalePrice,
-                  trControl=trControl,
-                  metric="RMSE",
-                  tuneList=list(
-                  ## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
-                          xgbTree = caretEnsemble::caretModelSpec(method="xgbTree",  tuneGrid = xgbTreeGrid, nthread = 8),
-                          #glmnet=caretModelSpec(method="glmnet", tuneGrid = glmnetGridElastic), ## Elastic, highly correlated with lasso and ridge regressions
-                          glmnet=caretEnsemble::caretModelSpec(method="glmnet", tuneGrid = glmnetGridLasso), ## Lasso
-                          glmnet=caretEnsemble::caretModelSpec(method="glmnet", tuneGrid = glmnetGridRidge) ## Ridge
-                          #svmLinear3= caretModelSpec(method="svmLinear3", tuneLenght = 20) ## SVM 
-                          )
-)
-
-greedyEnsemble <- caretEnsemble(
-  modelList, 
-  metric="RMSE",
-  trControl=trainControl(
-    number=7, method = "cv"
-  ))
-
-summary(greedyEnsemble)
-```
-
-- Model evaluation
-
-```{r} 
-train_predict <- stats::predict(model, train.dt.processed)
-ggplot2::qplot(x = exp(train_predict), y = exp(train.dt.processed$SalePrice),
+validation.prediction <- stats::predict(model, validation)
+ggplot2::qplot(x = exp(validation.prediction), y = exp(validation$SalePrice),
                geom = c("point", "smooth"), method = "lm",
                xlab = "Paredicted", ylab = "Real")
+
+rmse(validation$SalePrice, validation.prediction)
 ```
 
 - Variable importance
 
-```{r}
+```{r} # SKIP
 model.variable.importance <- caret::varImp(model)
 ggplot2::ggplot(model.variable.importance) + geom_density()
 ```
 
-```{r}
+```{r} # SKIP
 best.predictor.importance.index <- model.variable.importance$importance %>% mutate(names = row.names(.)) %>% arrange(-Overall)
 
 best.predictor.importance.variables <- c("SalePrice", best.predictor.importance.index$names[1:10])
@@ -583,15 +485,15 @@ best.predictor.importance.variables <- c("SalePrice", best.predictor.importance.
 Trying to improve model ...
 
 ```{r}
-best.predictor.importance.data <- train_pre_processed_values[, best.predictor.importance.variables]
+# best.predictor.importance.data <- train_pre_processed_values[, best.predictor.importance.variables]
 
 model <- caret::train(SalePrice ~ .,
-  data = best.predictor.importance.data,
-  method = 'xgbLinear', # svmRadial # xgbLinear # glmnet #svmLinear2
+  data = train.dt.processed,
+  method = 'gbm', # svmRadial # xgbLinear # glmnet #svmLinear2
   trControl = caret::trainControl(
   method = 'repeatedcv',
   number = 10,
-  repeats = 5
+  repeats = 1
   ))
 
 model
@@ -600,17 +502,59 @@ model
 ## Prediction
 
 ```{r}
-t <- select(test.dt.processed, - Id)
-test_predict <- stats::predict(model, test.dt.processed)
+# t <- select(test.dt.processed, - Id)
+test.prediction <- stats::predict(model, test.dt.processed)
 ```
 
 ## Submiting data
 
 ```{r}
-prediction.table <- data.frame(Id = test$Id, SalePrice = exp(test_predict))
-write.csv(prediction.table, paste0('xgbLinear_top10variables', "_predictions", ".csv"), row.names = F)
+prediction.table <- data.frame(Id = test$Id, SalePrice = exp(test.prediction))
+write.csv(prediction.table, paste0('with_preValidation', "_predictions_1", ".csv"), row.names = F)
 ```
 
 
+######## MORE ##################
 
+```{r}
+library(vtreat)
+library(caretEnsemble)
+
+features <- setdiff(names(full.dt), c("SalePrice", "Id", "dataPartition")) #Check in original code
+treatplan <- vtreat::designTreatmentsZ(train.dt.processed, minFraction = 0.01, rareCount = 0, features, verbose = FALSE)
+train.full.treat <- prepare(treatplan, dframe = train.dt.processed, codeRestriction = c("clean", "lev"))
+test.treat <- prepare(treatplan, dframe = test.dt.processed, codeRestriction = c("clean", "lev"))
+
+trControl <- trainControl(
+        method = "cv",
+        number = 7,
+        savePredictions = "final",
+        index = createResample(train.dt.processed$OverallQual, 7),
+        allowParallel = TRUE
+)
+xgbTreeGrid <- expand.grid(nrounds = 400, max_depth = 3, eta = 0.1, gamma = 0, colsample_bytree = 1.0, subsample = 1.0, min_child_weight = 4)
+glmnetGridElastic <- expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
+glmnetGridLasso <- expand.grid(.alpha = 1, .lambda = seq(0.001, 0.1, by = 0.001))
+glmnetGridRidge <- expand.grid(.alpha = 0, .lambda = seq(0.001, 0.1, by = 0.001))
+set.seed(333)
+modelList <<- caretEnsemble::caretList(
+                  x = train.full.treat,
+                  y = train.dt.processed$SalePrice,
+                  trControl = trControl,
+                  metric = "RMSE",
+                  tuneList = list(
+## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+                          xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = xgbTreeGrid, nthread = 8),
+#glmnet=caretModelSpec(method="glmnet", tuneGrid = glmnetGridElastic), ## Elastic, highly correlated with lasso and ridge regressions
+                          glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridLasso), ## Lasso
+                          glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridRidge) ## Ridge
+#svmLinear3= caretModelSpec(method="svmLinear3", tuneLenght = 20) ## SVM 
+                          )
+)
+```
+
+```{r}
+# predictions <- caretEnsemble::predict.caretList(modelList, newdata = test.dt.processed)
+p <- as.data.frame(predict(modelList, newdata = head(test.dt.processed)))
+```
 

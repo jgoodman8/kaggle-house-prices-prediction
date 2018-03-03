@@ -14,10 +14,10 @@ Inspección de los datos
 -----------------------
 
 ```{r, echo=FALSE}
-required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics")
+required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
 if (length(new_packages)) install.packages(new_packages)
-# library(pls)
+
 library(ggplot2)
 library(dplyr)
 library(caret)
@@ -26,9 +26,20 @@ library(glmnet)
 library(xgboost)
 library(data.table)
 library(Metrics)
+library(cowplot)
 
 train <- read.csv("train.csv")
 test <- read.csv("test.csv")
+full.set <- data.frame(
+                       data.table::rbindlist(list(train, cbind(test, SalePrice = as.integer(NA))),
+                                             use.names = F,
+                                             fill = F))
+```
+
+```{r}
+getTrainFromFullSet <- function() {
+    return(full.set[c(1:nrow(train)),])
+}
 ```
 
 Las dimensiones del conjunto de entrenamiento son las siguientes:
@@ -36,78 +47,64 @@ Las dimensiones del conjunto de entrenamiento son las siguientes:
 ```{r}
 dim(train)
 dim(test)
+dim(full.set)
 ```
 
 A continuacin, procedemos a examinar las variables del dataset:
 
 ```{r}
-str(train)
+str(full.set)
 ```
 
 Y observamos el inicio:
 
 ```{r}
-head(train)
+head(full.set)
 ```
 
-Tratamiento de valores perdidos
--------------------------------
+- Análisis de valores perdidos
 
 ```{r}
-numeric <- names(train)[which(sapply(train, is.numeric))] # Variables numéricas
+lost.count <- apply(is.na(select(full.set, - SalePrice)), 2, sum)
+lost.count <- which(lost.count > 0)
+lost.percentage <- (lost.count / nrow(full.set)) * 100
 
-lost_numeric_values_count <- colSums(sapply(train[, numeric], is.na))
+data.frame(lost.count, lost.percentage)
+```
 
-plot_Missing <- function(data_in, title = NULL) {
-    temp_df <- as.data.frame(ifelse(is.na(data_in), 0, 1))
-    temp_df <- temp_df[, order(colSums(temp_df))]
-    data_temp <- expand.grid(list(x = 1:nrow(temp_df), y = colnames(temp_df)))
-    data_temp$m <- as.vector(as.matrix(temp_df))
-    data_temp <- data.frame(x = unlist(data_temp$x), y = unlist(data_temp$y), m = unlist(data_temp$m))
-    ggplot2::ggplot(data_temp) +
+```{r} # TODO: Clarificar o simplificar operaciones
+numeric <- names(full.set)[which(sapply(train, is.numeric))] # Variables numéricas
+
+lost_numeric_values_count <- colSums(sapply(full.set[, numeric], is.na))
+
+data_in <- full.set[, colSums(is.na(select(full.set, - SalePrice))) > 0]
+
+temp_df <- as.data.frame(ifelse(is.na(data_in), 0, 1))
+temp_df <- temp_df[, order(colSums(temp_df))]
+data_temp <- expand.grid(list(x = 1:nrow(temp_df), y = colnames(temp_df)))
+data_temp$m <- as.vector(as.matrix(temp_df))
+data_temp <- data.frame(x = unlist(data_temp$x), y = unlist(data_temp$y), m = unlist(data_temp$m))
+
+ggplot2::ggplot(data_temp) +
       ggplot2::geom_tile(ggplot2::aes(x = x, y = y, fill = factor(m))) +
-      ggplot2::scale_fill_manual(values = c("white", "black"), name = "Missing\n(0=Yes, 1=No)") +
+      ggplot2::scale_fill_manual(values = c("white", "black"), name = "Perdido\n(0=Yes, 1=No)") +
       ggplot2::theme_light() +
       ggplot2::ylab("") + ggplot2::xlab("") +
-      ggplot2::ggtitle(title)
-}
-
-plot_Missing(train[, colSums(is.na(train)) > 0])
+      ggplot2::ggtitle("Valores perdidos en el conjunto total de datos")
 ```
 
-Predicion variable distribution
--------------------------------
-
-
+- Análisis de la distribución de la variable clase
 
 ```{r}
-par(mfrow = c(1, 2))
+par(mfrow = c(2, 2))
+
 hist(train$SalePrice, main = "SalePrice")
 hist(log10(train$SalePrice), main = "Log10(SalePrice)")
 
-par(mfrow = c(1, 2))
 boxplot(train$SalePrice, main = "SalePrice")
 boxplot(log10(train$SalePrice), main = "Log10(SalePrice)")
-```
 
-Los values (NA) count
-
-```{r}
-na_info <- apply(is.na(train), 2, sum)
-lost_values_info <- which(na_info > 0)
-filtered_lost_values_info <- na_info[lost_values_info]
-df_filtered_lost_values_info <- data.frame(filtered_lost_values_info)
-
-# TODO: Put dots instead of an histogram
-
-ggplot() +
-    geom_point(aes(x = rownames(df_filtered_lost_values_info), y = df_filtered_lost_values_info$filtered_lost_values_info)) +
-    geom_hline(yintercept = nrow(train) * 0.05, color = 'pink') +
-    geom_hline(yintercept = nrow(train) * 0.10, color = 'orange') +
-    geom_hline(yintercept = nrow(train) * 0.20, color = 'blue') +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-    xlab('Features with lost values') +
-    ylab('Number of lost values')
+par(mfrow = c(1, 1))
 ```
 
 - Distribución de los valores perdidos en función de la variable Log(SalePrice)
@@ -125,26 +122,36 @@ for (feature in names(filtered_lost_values_info)) {
 ```{r}
 numeric_features <- numeric <- names(train)[which(sapply(train, is.numeric))]
 numeric_feature_with_lost_values <- intersect(numeric_features, names(filtered_lost_values_info))
-for (feature in numeric_feature_with_lost_values) {
-    print(ggplot(data = train, aes(x = train[, feature], y = log(train$SalePrice))) +
+
+plots <- lapply(numeric_feature_with_lost_values, function(feature) {
+    ggplot(data = train, aes(x = train[, feature], y = log(train$SalePrice))) +
           geom_point() +
           geom_smooth(method = "lm") +
-          xlab(label = feature))
-}
+          xlab(label = feature) +
+          ylab(label = "Log(SalePrice)")
+})
+
+cowplot::plot_grid(plotlist = plots, ncol = 2)
 ```
 
 
+## Tratamiento de los valores perdidos
+
 - GarageYrBlt
+
 Se aprecia que es una propidad que, lógicamente, está muy relacionada con YearBuilt (año de construcción). En general, se puede decir que GarageYrBlt tiende a ser igual a YearBuilt. Por consiguiente, en los valores perdidos de GarageYrBlt, se procede a asígnar el correspondiente valor de YearBuilt.
+
 ```{r}
-ggplot(data = train, aes(x = train$GarageYrBlt, y = train$YearBuilt)) +
+ggplot(data = full.set, aes(x = GarageYrBlt, y = YearBuilt)) +
           geom_point() +
           geom_smooth(method = "lm")
 
-train$GarageYrBlt[is.na(train$GarageYrBlt)] <- train$YearBuilt[is.na(train$GarageYrBlt)]
+full.set$GarageYrBlt[full.set$GarageYrBlt == 2207] <- 2007
+full.set$GarageYrBlt[is.na(full.set$GarageYrBlt)] <- full.set$YearBuilt[is.na(full.set$GarageYrBlt)]
 ```
 
 - LotFrontage
+
 Por lógica, se puede decir que el área de la propiedad con la longitud de la fachada. Para confirmarlo, comprobamos la correlación entre ellas:
 
 ```{r}
@@ -295,7 +302,6 @@ for (none in none_types) {
     }
 }
 
-test$GarageYrBlt[test$GarageYrBlt == 2207] <- 2007
 test$GarageYrBlt[is.na(test$GarageYrBlt)] <- test$YearBuilt[is.na(test$GarageYrBlt)]
 test$LotFrontage[is.na(test$LotFrontage)] <- median(test$LotFrontage[!is.na(test$LotFrontage)])
 test <- dplyr::select(test, - MasVnrArea)
@@ -349,7 +355,7 @@ ggplot(transformed_train, aes(y = SalePrice, x = GrLivArea)) + ggtitle("Without 
 ```
 
 
-```{r}
+```{r} # TODO: Delete due move
 train.dt <- transformed_train
 test.dt <- cbind(transformed_test, SalePrice = as.integer(NA))
 full.dt <- data.table::rbindlist(list(train.dt, test.dt), use.names = F, fill = F)
@@ -406,12 +412,29 @@ full.dt[, variablesSquareFootage] <- log(1 + full.dt[, variablesSquareFootage, w
 ```
 
 ```{r}
+full.dt <- data.frame(full.dt)
+for (i in 1:ncol(full.dt)) {
+    if (is.factor(full.dt[, i])) {
+        levels(full.dt[, i]) <- c(1:length(levels(full.dt[, i])))
+        full.dt[, i] <- as.numeric(full.dt[, i])
+    }
+}
+
+feature_classes <- sapply(names(full.dt), function(x) {
+    class(full.dt[, x])
+})
+numeric_feats <- names(feature_classes[feature_classes != "character"])
+skewed_feats <- sapply(numeric_feats, function(x) {
+    e1071::skewness(full.dt[, x], na.rm = TRUE)
+})
+skewed_feats <- skewed_feats[abs(skewed_feats) > 0.75]
+for (x in names(skewed_feats)) {
+    bc = caret::BoxCoxTrans(full.dt[, x], lambda = 0.15)
+    full.dt[, x] = predict(bc, full.dt[, x])
+}
+
 full.dt.processed <- predict(caret::preProcess(select(full.dt, - SalePrice),
     method = c("center", "scale")), full.dt)
-
-################## PARTITIONED ####################################
-# train_pre_processed_values <- predict(caret::preProcess(transformed_train[, - ncol(transformed_train)], method = c("center", "scale")), transformed_train)
-# test_pre_processed_values <- predict(caret::preProcess(transformed_test, method = c("center", "scale")), transformed_test)
 ```
 
 - Spliting into train and test
@@ -420,18 +443,6 @@ full.dt.processed <- predict(caret::preProcess(select(full.dt, - SalePrice),
 train.dt.processed <- full.dt.processed[1:nrow(train.dt),]
 test.dt.processed <- full.dt.processed[(nrow(train.dt) + 1):nrow(full.dt.processed),]
 test.dt.processed <- dplyr::select(test.dt.processed, - SalePrice)
-```
-
-### Selección de variables
-
-- lm
-
-```{r}
-exploratory_lm = lm(SalePrice ~ ., data = train.dt.processed)
-summary(exploratory_lm)
-
-# step_forward_stats <- olsrr::ols_step_forward(exploratory_lmstep_forward_stats)
-# plot(step_forward_stats)
 ```
 
 ## Entrenamiento
@@ -467,6 +478,11 @@ ggplot2::qplot(x = exp(validation.prediction), y = exp(validation$SalePrice),
                xlab = "Paredicted", ylab = "Real")
 
 rmse(validation$SalePrice, validation.prediction)
+```
+
+```{r}
+rediduals <- (validation$SalePrice - validation.prediction)
+qplot(validation$SalePrice - validation.prediction,)
 ```
 
 - Variable importance
@@ -536,25 +552,81 @@ xgbTreeGrid <- expand.grid(nrounds = 400, max_depth = 3, eta = 0.1, gamma = 0, c
 glmnetGridElastic <- expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
 glmnetGridLasso <- expand.grid(.alpha = 1, .lambda = seq(0.001, 0.1, by = 0.001))
 glmnetGridRidge <- expand.grid(.alpha = 0, .lambda = seq(0.001, 0.1, by = 0.001))
-set.seed(333)
-modelList <<- caretEnsemble::caretList(
-                  x = train.full.treat,
-                  y = train.dt.processed$SalePrice,
-                  trControl = trControl,
-                  metric = "RMSE",
-                  tuneList = list(
-## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
-                          xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = xgbTreeGrid, nthread = 8),
-#glmnet=caretModelSpec(method="glmnet", tuneGrid = glmnetGridElastic), ## Elastic, highly correlated with lasso and ridge regressions
-                          glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridLasso), ## Lasso
-                          glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridRidge) ## Ridge
-#svmLinear3= caretModelSpec(method="svmLinear3", tuneLenght = 20) ## SVM 
-                          )
-)
 ```
 
 ```{r}
-# predictions <- caretEnsemble::predict.caretList(modelList, newdata = test.dt.processed)
-p <- as.data.frame(predict(modelList, newdata = head(test.dt.processed)))
+# Write a function that gets a data set and converts all factor variables to dummy variables
+convert.to.dummy <- function(data.set) {
+    data.set <- data.frame(data.set)
+    cat.var <- NULL
+    temp.data <- data.frame(1:nrow(data.set))
+    for (i in 1:ncol(data.set)) {
+        if (class(data.set[, i]) == "factor") {
+            cat.var <- c(cat.var, i)
+            factor.levels <- levels(data.set[, i]) # Try to find a way to classify NA's as "NO" otherwise they generate problem downstream
+            # First check if there is any 'NA-level'
+            if (any(is.na(data.set[, i]))) {
+                dummy.vector = ifelse(is.na(data.set[, i]), 1, 0)
+                dummy.vector <- data.frame(dummy.vector)
+                colnames(dummy.vector)[1] = paste("NO", names((data.set)[i]), sep = ".")
+                temp.data <- cbind(temp.data, dummy.vector)
+            }
+
+            for (j in seq_along(factor.levels)) {
+                # Then deal with normal factor levels
+                dummy.vector = ifelse(data.set[, i] == factor.levels[j], 1, 0)
+
+                #Since we already dealt with NAs above
+                if (any(is.na(dummy.vector))) { dummy.vector[is.na(dummy.vector)] <- 0 }
+
+                dummy.vector <- data.frame(dummy.vector)
+                colnames(dummy.vector)[1] = paste(names((data.set)[i]),
+                                                                  factor.levels[j], sep = ".")
+                temp.data <- cbind(temp.data, dummy.vector)
+            }
+        }
+    }
+    #Remove the original categorical variables from data.set
+    data.set <- data.set[, - cat.var]
+    #Add the dummy.variable set
+    temp.data <- temp.data[, -1] # remove the unnecessary column
+    data.set <- cbind(data.set, temp.data)
+
+    return(data.set)
+}
+
+training.processed.dummy <- convert.to.dummy(train.dt.processed)
+test.dt.processed.dummy <- convert.to.dummy(test.dt.processed)
+```
+
+```{r}
+set.seed(333)
+modelList <<- caretEnsemble::caretList(
+                  SalePrice ~ .,
+                  data = train.dt.processed,
+                  trControl = trControl,
+                  metric = "RMSE",
+                  tuneList = list(
+    gbm = caretModelSpec(method = "gbm", tuneGrid = expand.grid(n.trees = 700, interaction.depth = 5,
+                                                          shrinkage = 0.05, n.minobsinnode = 10)),
+    xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = expand.grid(nrounds = 2500, max_depth = 6, min_child_weight = 1.41,
+                                                                  eta = 0.01, gamma = 0.0468, subsample = 0.769,
+                                                                  colsample_bytree = 0.283))
+## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
+#xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = xgbTreeGrid, nthread = 8),
+#glmnet=caretModelSpec(method="glmnet", tuneGrid = glmnetGridElastic), ## Elastic, highly correlated with lasso and ridge regressions
+# glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridLasso), ## Lasso
+# glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridRidge) ## Ridge
+#svmLinear3= caretModelSpec(method="svmLinear3", tuneLenght = 20) ## SVM 
+                          )
+)
+
+greedy_ensemble <- caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
+```
+
+```{r}
+predictions <- predict(greedy_ensemble, newdata = test.dt.processed)
+prediction.table <- data.frame(Id = test$Id, SalePrice = exp(predictions))
+write.csv(prediction.table, paste0('complex', "_predictions_3", ".csv"), row.names = F)
 ```
 

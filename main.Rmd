@@ -13,7 +13,7 @@ knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
 # Inspección de los datos
 
 ```{r, echo=FALSE}
-required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble")
+required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble", "dummies")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
 if (length(new_packages)) install.packages(new_packages)
 
@@ -27,6 +27,7 @@ library(data.table)
 library(Metrics)
 library(cowplot)
 library(caretEnsemble)
+library(dummies)
 
 set.seed(333)
 
@@ -116,7 +117,7 @@ par(mfrow = c(1, 1))
 
 - Distribución de los valores perdidos en función de la variable Log(SalePrice)
 
-```{r} # DELETE ¿?
+```{r} # TODO: DELETE ¿?
 for (feature in names(filtered_lost_values_info)) {
     categories <- train[, feature]
     print(ggplot(data = train, aes(x = feature, y = log(SalePrice), fill = categories)) +
@@ -383,7 +384,6 @@ full.set.transformed$SalePrice <- log(full.set.transformed$SalePrice)
 
 ```{r}
 continuous.features <- c(
-  "LotFrontage", ## Linear feet of street connected to property 
   "LotArea", ## Lot size in square feet
   "BsmtFinSF1", ## Type 1 finished square feet    
   "BsmtFinSF2", ## Type 2 finished square feet
@@ -449,27 +449,29 @@ for (i in 1:ncol(full.set.transformed)) {
 ```
 
 ```{r}
-features.class <- sapply(names(full.set.transformed), function(feature) {
-    class(full.set.transformed[, feature])
+full.set.transformed.dummy <- dummy.data.frame(full.set.transformed, dummy.classes = "character")
+
+features.class <- sapply(names(full.set.transformed.dummy), function(feature) {
+    class(full.set.transformed.dummy[[feature]])
 })
 features.class.numeric <- names(features.class[features.class != "character"])
 
 features.class.numeric.skewed <- sapply(features.class.numeric, function(feature) {
-    e1071::skewness(full.set.transformed[, feature], na.rm = TRUE)
+    e1071::skewness(full.set.transformed.dummy[[feature]], na.rm = TRUE)
 })
 features.class.numeric.skewed <- features.class.numeric.skewed[abs(features.class.numeric.skewed) > 0.75]
 
 for (feature in names(features.class.numeric.skewed)) {
-    box.cox = caret::BoxCoxTrans(full.set.transformed[, feature], lambda = 0.15)
-    full.set.transformed[, feature] = predict(box.cox, full.set.transformed[, feature])
+    box.cox = caret::BoxCoxTrans(full.set.transformed.dummy[[feature]], lambda = 0.15)
+    full.set.transformed.dummy[[feature]] = predict(box.cox, full.set.transformed.dummy[[feature]])
 }
 ```
 
 - Spliting into train and test
 
 ```{r}
-train.processed <- full.set.transformed[1:nrow(train.transformed),]
-test.processed <- full.set.transformed[(nrow(train.transformed) + 1):nrow(full.set.transformed),]
+train.processed <- full.set.transformed.dummy[1:nrow(train.transformed),]
+test.processed <- full.set.transformed.dummy[(nrow(train.transformed) + 1):nrow(full.set.transformed.dummy),]
 test.processed <- dplyr::select(test.processed, - SalePrice)
 ```
 
@@ -523,7 +525,7 @@ predictAndEvaluate <- function(model, validation.set) {
                geom = c("point", "smooth"), method = "lm",
                xlab = "Predicted", ylab = "Real"))
 
-    rmse(validation.set$SalePrice, validation.prediction) # 0.1344078
+    rmse(validation.set$SalePrice, validation.prediction)
 }
 ```
 
@@ -563,12 +565,12 @@ ensembleTrain <- function(train.set) {
 ```
 
 ```{r}
-model.ensemble <- ensembleTrain(train.processed.partition.train2)
+model.ensemble <- ensembleTrain(train.processed.partition.train)
 ```
 
 ```{r}
 model.ensemble # 0.1322569
-predictAndEvaluate(model.ensemble, train.processed.partition.validation2) # 0.1230385
+predictAndEvaluate(model.ensemble, train.processed.partition.validation) # 0.1230385
 ```
 
 ## Full train

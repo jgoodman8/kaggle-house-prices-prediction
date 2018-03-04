@@ -1,8 +1,8 @@
 ---
 title: "Kaggle House Prices"
-author: Javier Guzmán Figueira Dominguez
-date: Febrero 2018
-output: pdf_document
+author: "Javier Guzmán Figueira Domínguez"
+date: "04/03/2018"
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
@@ -29,14 +29,12 @@ library(cowplot)
 library(caretEnsemble)
 library(dummies)
 
-set.seed(333)
-
-train <- read.csv("train.csv")
-test <- read.csv("test.csv")
-full.set <- data.frame(
-                       data.table::rbindlist(list(train, cbind(test, SalePrice = as.integer(NA))),
-                                             use.names = F,
-                                             fill = F))
+SEED <- 12345
+setwd("C:/Users/cento/Documents/MasterUIMP/Practicas/aprendizajeautomatico/kaggle_house_prices")
+train <- read.csv("data/train.csv")
+test <- read.csv("data/test.csv")
+full.set <- data.frame(data.table::rbindlist(list(train, cbind(test, SalePrice = as.integer(NA))),
+                                             use.names = F, fill = F))
 ```
 
 ```{r}
@@ -118,11 +116,17 @@ par(mfrow = c(1, 1))
 - Distribución de los valores perdidos en función de la variable Log(SalePrice)
 
 ```{r} # TODO: DELETE ¿?
-for (feature in names(filtered_lost_values_info)) {
+lost.values.features <- rownames(getLostValuesStats())
+factor.features <- names(train)[which(sapply(train, is.factor))]
+lost.values.features.factor <- dplyr::intersect(factor.features, lost.values.features)
+
+plots <- lapply(lost.values.features.factor, function(feature) {
     categories <- train[, feature]
-    print(ggplot(data = train, aes(x = feature, y = log(SalePrice), fill = categories)) +
-        geom_boxplot())
-}
+    ggplot(data = train, aes(x = feature, y = log(SalePrice), fill = categories)) +
+        geom_boxplot()
+})
+
+cowplot::plot_grid(plotlist = plots, ncol = 3)
 ```
 
 - Examinamos la distribución de las variables continuas con respecto a Log(SalePrice)
@@ -255,7 +259,7 @@ qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("
 Las siguientes caraterísticas con valores perdidos se corresponden con aquellas que contienen entradas en las que hay una ausencia de la propiedad a la que representan. Por ejemplo, la propiedad *PoolQC* representa la calidad de la piscina, pero es obvio que en aquellas propiedades en las haya una ausencia de piscina, será inviable representar su calidad. Por consiguiente, se le asignarán el tipo "None" a aquellos valores ausentes (NA). Las caracteríasticas que contienen este tipo de valores perdidos son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
 
 ```{r}
-none_types <- c(
+categorical.features <- c(
   "PoolQC",
   "MiscFeature",
   "Alley",
@@ -272,11 +276,11 @@ none_types <- c(
   "BsmtQual"
   )
 
-for (none in none_types) {
-    if (is.factor(full.set[, none])) {
-        full.set[, none] <- as.character(full.set[, none])
-        full.set[, none][which(is.na(full.set[, none]))] <- "None"
-        full.set[, none] <- factor(full.set[, none])
+for (feature in categorical.features) {
+    if (is.factor(full.set[, feature])) {
+        full.set[, feature] <- as.character(full.set[, feature])
+        full.set[, feature][which(is.na(full.set[, feature]))] <- "None"
+        full.set[, feature] <- factor(full.set[, feature])
     }
 }
 
@@ -448,34 +452,15 @@ for (i in 1:ncol(full.set.transformed)) {
 }
 ```
 
-```{r}
-full.set.transformed.dummy <- dummy.data.frame(full.set.transformed, dummy.classes = "character")
-
-features.class <- sapply(names(full.set.transformed.dummy), function(feature) {
-    class(full.set.transformed.dummy[[feature]])
-})
-features.class.numeric <- names(features.class[features.class != "character"])
-
-features.class.numeric.skewed <- sapply(features.class.numeric, function(feature) {
-    e1071::skewness(full.set.transformed.dummy[[feature]], na.rm = TRUE)
-})
-features.class.numeric.skewed <- features.class.numeric.skewed[abs(features.class.numeric.skewed) > 0.75]
-
-for (feature in names(features.class.numeric.skewed)) {
-    box.cox = caret::BoxCoxTrans(full.set.transformed.dummy[[feature]], lambda = 0.15)
-    full.set.transformed.dummy[[feature]] = predict(box.cox, full.set.transformed.dummy[[feature]])
-}
-```
-
 - Spliting into train and test
 
 ```{r}
-train.processed <- full.set.transformed.dummy[1:nrow(train.transformed),]
-test.processed <- full.set.transformed.dummy[(nrow(train.transformed) + 1):nrow(full.set.transformed.dummy),]
+train.processed <- full.set.transformed[1:nrow(train.transformed),]
+test.processed <- full.set.transformed[(nrow(train.transformed) + 1):nrow(full.set.transformed),]
 test.processed <- dplyr::select(test.processed, - SalePrice)
 ```
 
-- lm.....
+- lm
 
 ```{r}
 exploratory.lm = lm(SalePrice ~ ., data = train.processed)
@@ -489,7 +474,7 @@ par(mfrow = c(1, 1))
 importance <- caret::varImp(exploratory.lm)
 importance.sort <- sort(importance$Overall, decreasing = TRUE, index.return = TRUE)
 
-data.frame("Feature" = rownames(importance)[importance.sort$ix], "Overall" = importance[importance.sort$ix,])[1:15, ]
+data.frame("Feature" = rownames(importance)[importance.sort$ix], "Overall" = importance[importance.sort$ix,])[1:15,]
 ```
 
 ## Entrenamiento
@@ -502,7 +487,8 @@ train.processed.partition.train <- train.processed[train.processed.partition.ind
 train.processed.partition.validation <- train.processed[-train.processed.partition.index,]
 ```
 
-```{r}
+```{r, echo = FALSE}
+set.seed(SEED)
 model.partial <- caret::train(SalePrice ~ .,
   data = train.processed.partition.train,
   method = 'gbm',
@@ -511,7 +497,9 @@ model.partial <- caret::train(SalePrice ~ .,
   number = 10,
   repeats = 1
   ))
+```
 
+```{r}
 model.partial
 ```
 
@@ -530,13 +518,15 @@ predictAndEvaluate <- function(model, validation.set) {
 ```
 
 ```{r}
-predictAndEvaluate(model.partial, train.processed.partition.validation) # 0.134816
+predictAndEvaluate(model.partial, train.processed.partition.validation)
 ```
 
 Trying to improve model ...
 
 ```{r}
 ensembleTrain <- function(train.set) {
+    set.seed(SEED)
+
     trControl <- trainControl(
         method = "cv",
         number = 7,
@@ -564,19 +554,22 @@ ensembleTrain <- function(train.set) {
 }
 ```
 
-```{r}
+```{r, echo = FALSE}
 model.ensemble <- ensembleTrain(train.processed.partition.train)
 ```
 
 ```{r}
-model.ensemble # 0.1322569
-predictAndEvaluate(model.ensemble, train.processed.partition.validation) # 0.1230385
+model.ensemble
+predictAndEvaluate(model.ensemble, train.processed.partition.validation)
 ```
 
 ## Full train
 
-```{r}
+```{r, echo = FALSE}
 model.full <- ensembleTrain(train.processed)
+```
+
+```{r}
 model.full
 ```
 
@@ -585,6 +578,5 @@ model.full
 ```{r}
 predictions <- predict(model.full, newdata = test.processed)
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(predictions))
-write.csv(prediction.table, "clean_prediction_3.csv", row.names = FALSE)
+write.csv(prediction.table, "prediction.csv", row.names = FALSE)
 ```
-

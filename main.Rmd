@@ -501,7 +501,9 @@ test.processed <- full.set.transformed[(nrow(train.transformed) + 1):nrow(full.s
 test.processed <- dplyr::select(test.processed, - SalePrice)
 ```
 
-De forma exploratoria, se procede a relizar una sencilla regresión linear y analizar la uniformación desprendida de su resultado.
+## Análisis exploratorio
+
+De forma exploratoria, se procede a relizar una sencilla regresión linear y analizar la uniformación desprendida de su resultado. De esta forma obtenemos información sobre si nuestro conjunto de datos puede producir un buen modelo. Así, observando la primera gráfica se aprecia como los valores residuales se mantienen en torno a 0, especialmente en la zona de concentración de más instancias.
 
 ```{r}
 exploratory.lm = lm(SalePrice ~ ., data = train.processed)
@@ -511,6 +513,8 @@ plot(exploratory.lm)
 par(mfrow = c(1, 1))
 ```
 
+También puede ser interesante concer cuales son las características con más impacto en la generación del modelo. A continuación, se muestra un ranking de las quince características más salientables. De forma destacada, la más ìmporante es *OverallQual*, dato que nos será relevante más adelante.
+
 ```{r}
 importance <- caret::varImp(exploratory.lm)
 importance.sort <- sort(importance$Overall, decreasing = TRUE, index.return = TRUE)
@@ -518,13 +522,19 @@ importance.sort <- sort(importance$Overall, decreasing = TRUE, index.return = TR
 data.frame("Feature" = rownames(importance)[importance.sort$ix], "Overall" = importance[importance.sort$ix,])[1:15,]
 ```
 
-- Entrenamiento "parcial"
+## Entrenamiento parcial
+
+Dado que nuestro conjunto de test no contiene información de la variable clase *SalePrice*, no se puede realizar una validación clásica del modelo. Es decir, se podría comparar el *RMSE* obtenido en la plataforma Kaggle y compraralo con el respectivo del conjunto de entrenamiento. Sin embargo, perderíamos mucha información en el proceso y no sería demasiado extensible.
+
+Por lo tanto, se realiza una partición del conjunto de entrenamiento de forma que generemos dos nuevos subconjutos. Es decir, un nuevo subconjunto de entrenamiento (70% de las intancias del conjunto de entrenamiento original) y otro subconjunto de validación (formado por el 30% de intancias restantes).
 
 ```{r}
 train.processed.partition.index <- createDataPartition(train.processed$SalePrice, p = 0.7, list = FALSE)
 train.processed.partition.train <- train.processed[train.processed.partition.index,]
 train.processed.partition.validation <- train.processed[-train.processed.partition.index,]
 ```
+
+Ahora se procede al entrenamiento del modelo. Se ha elegido un método de *Gradient boosting*, basado en árboles de decisión.
 
 ```{r}
 set.seed(SEED)
@@ -538,13 +548,13 @@ garbage <- capture.output(
       repeats = 1
       ))
 )
-```
 
-```{r}
 model.partial
 ```
 
-- Validación del modelo
+### Validación del modelo
+
+Para la validación del modelo, se crea la función *predictAndEvaluate*, de forma que se genere la respectiva predicción y se genere una gráfica comparativa entre los valores predichos y la respectiva *RSME*.
 
 ```{r}
 predictAndEvaluate <- function(model, validation.set) {
@@ -558,11 +568,15 @@ predictAndEvaluate <- function(model, validation.set) {
 }
 ```
 
+Se procede a realizar la predicción del subconjunto de validación.
+
 ```{r}
 predictAndEvaluate(model.partial, train.processed.partition.validation)
 ```
 
-Trying to improve model ...
+## Mejorando el modelo
+
+Aunque no se han obtenido unos malos resultados, se quiere mejorar el entrenamiento del modelo. Para ello se ha creado al función *ensembleTrain*. Dicha función utiliza métodos del paquete *caretEnsemble*, de forma que permite combinar distintos modelos de *caret*. De esta forma, combinamos el *gbm* con otro tipo de árbol de decisión, un *xgbTree* o *eXtreme Gradient Boosting*. Así mismo, utlizamos la variable más relevante del dataset (*OverallQual*) para realizar un muestreo con *bootstrap*. Finalmente, juntamos los resultados basándonos en la métrica *RMSE*.
 
 ```{r}
 ensembleTrain <- function(train.set) {
@@ -572,7 +586,7 @@ ensembleTrain <- function(train.set) {
         method = "cv",
         number = 7,
         savePredictions = "final",
-        index = createResample(train.set$OverallQual, 7),
+        index = caret::createResample(train.set$OverallQual, 7),
         allowParallel = TRUE
     )
 
@@ -583,39 +597,51 @@ ensembleTrain <- function(train.set) {
                       trControl = trControl,
                       metric = "RMSE",
                       tuneList = list(
-        gbm = caretModelSpec(
+        gbm = caretEnsemble::caretModelSpec(
                  method = "gbm", tuneGrid = expand.grid(n.trees = 700, interaction.depth = 5,
                  shrinkage = 0.05, n.minobsinnode = 10)),
-        xgbTree = caretModelSpec(
+        xgbTree = caretEnsemble::caretModelSpec(
                     method = "xgbTree", tuneGrid = expand.grid(nrounds = 2500, max_depth = 6, min_child_weight = 1.41,
                         eta = 0.01, gamma = 0.0468, subsample = 0.769, colsample_bytree = 0.283))
         ))
     )
 
-    greedy_ensemble <- caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
+    greedy_ensemble <- caretEnsemble::caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
 
     return(greedy_ensemble)
 }
 ```
 
+Se puede observar que tanto en el conjunto de entrenamiento como en el de validación, los valores han mejorado. Así mismo, la predicción parece correcta en la gráfica.
+
 ```{r}
 model.ensemble <- ensembleTrain(train.processed.partition.train)
-model.ensemble
-predictAndEvaluate(model.ensemble, train.processed.partition.validation)
+model.ensemble # 0.1191271
+predictAndEvaluate(model.ensemble, train.processed.partition.validation) # 0.1376281
 ```
 
-## Full train
+# Entrenamiento y predicción
+
+Finalmente, se procede al entrenamiento de la totalidad del conjunto de entrenamiento y a su predicción. El valor de *RMSE* obtenido en la plataforma Kaggle es de XXXX, por un XXX obtenido en el conjunto de entrenamiento. Ámbos son unos valores muy silimares, lo que nos confirma la ausencia de bias y varianza en el modelo contruido.
 
 ```{r}
 model.full <- ensembleTrain(train.processed)
-model.full
-```
+model.full # 0.1257321
 
-## Prediction and submit
-
-```{r}
 predictions <- predict(model.full, newdata = test.processed)
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(predictions))
-write.csv(prediction.table, "prediction2.csv", row.names = FALSE)
-print(prediction.table)
+write.csv(prediction.table, "prediction.csv", row.names = FALSE) # 0.12332
+# print(prediction.table)
 ```
+
+# Referencias
+
+A continuación se detallan los *kernels* de Kaggle utlizados tanto como inspiración como fuente de fragmentos de código:
+
+- https://www.kaggle.com/wangyizhou30/svm-more5/code
+- https://www.kaggle.com/philip198/starting-out-with-r-house-prices-prediction/code
+- https://www.kaggle.com/bwboerman/r-data-table-glmnet-xgboost-with-caret/notebook
+- https://www.kaggle.com/mariopasquato/support-vector-regression/code
+- https://www.kaggle.com/dataygun/a-story-of-just-everything
+- https://www.kaggle.com/notaapple/detailed-exploratory-data-analysis-using-r
+- https://www.kaggle.com/jimthompson/regularized-linear-models-in-r

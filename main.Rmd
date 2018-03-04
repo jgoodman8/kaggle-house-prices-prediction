@@ -1,8 +1,8 @@
 ---
 title: "Kaggle House Prices"
-author: Javier Guzman Figueira Dominguez
-date: Diciembre 2017
-output: html_document
+author: Javier Guzmán Figueira Dominguez
+date: Febrero 2018
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -10,11 +10,10 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
 ```
 
-Inspección de los datos
------------------------
+# Inspección de los datos
 
 ```{r, echo=FALSE}
-required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot")
+required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
 if (length(new_packages)) install.packages(new_packages)
 
@@ -27,6 +26,9 @@ library(xgboost)
 library(data.table)
 library(Metrics)
 library(cowplot)
+library(caretEnsemble)
+
+set.seed(333)
 
 train <- read.csv("train.csv")
 test <- read.csv("test.csv")
@@ -37,8 +39,12 @@ full.set <- data.frame(
 ```
 
 ```{r}
-getTrainFromFullSet <- function() {
-    return(full.set[c(1:nrow(train)),])
+updatePartitions <- function() {
+    train.size <- nrow(train)
+    full.set.size <- nrow(full.set)
+
+    train <<- full.set[c(1:train.size),]
+    test <<- full.set[c((train.size + 1):full.set.size),]
 }
 ```
 
@@ -65,27 +71,28 @@ head(full.set)
 - Análisis de valores perdidos
 
 ```{r}
-lost.count <- apply(is.na(select(full.set, - SalePrice)), 2, sum)
-lost.count <- which(lost.count > 0)
-lost.percentage <- (lost.count / nrow(full.set)) * 100
+getLostValuesStats <- function() {
+    lost.count <- colSums(sapply(select(full.set, - SalePrice), is.na))
+    lost.count <- subset(lost.count, lost.count > 0)
+    lost.percentage <- (lost.count / nrow(full.set)) * 100
 
-data.frame(lost.count, lost.percentage)
+    return(data.frame(lost.count, lost.percentage))
+}
+
+getLostValuesStats()
 ```
 
-```{r} # TODO: Clarificar o simplificar operaciones
-numeric <- names(full.set)[which(sapply(train, is.numeric))] # Variables numéricas
+```{r}
+lost.values.count <- full.set[, colSums(is.na(select(full.set, - SalePrice))) > 0]
 
-lost_numeric_values_count <- colSums(sapply(full.set[, numeric], is.na))
+is.lost.value <- as.data.frame(ifelse(is.na(lost.values.count), 0, 1))
+is.lost.value <- is.lost.value[, order(colSums(is.lost.value))]
 
-data_in <- full.set[, colSums(is.na(select(full.set, - SalePrice))) > 0]
+is.lost.value.grid <- expand.grid(list(x = 1:nrow(is.lost.value), y = colnames(is.lost.value)))
+is.lost.value.grid$m <- as.vector(as.matrix(is.lost.value))
+is.lost.value.grid <- data.frame(x = unlist(is.lost.value.grid$x), y = unlist(is.lost.value.grid$y), m = unlist(is.lost.value.grid$m))
 
-temp_df <- as.data.frame(ifelse(is.na(data_in), 0, 1))
-temp_df <- temp_df[, order(colSums(temp_df))]
-data_temp <- expand.grid(list(x = 1:nrow(temp_df), y = colnames(temp_df)))
-data_temp$m <- as.vector(as.matrix(temp_df))
-data_temp <- data.frame(x = unlist(data_temp$x), y = unlist(data_temp$y), m = unlist(data_temp$m))
-
-ggplot2::ggplot(data_temp) +
+ggplot2::ggplot(is.lost.value.grid) +
       ggplot2::geom_tile(ggplot2::aes(x = x, y = y, fill = factor(m))) +
       ggplot2::scale_fill_manual(values = c("white", "black"), name = "Perdido\n(0=Yes, 1=No)") +
       ggplot2::theme_light() +
@@ -109,7 +116,7 @@ par(mfrow = c(1, 1))
 
 - Distribución de los valores perdidos en función de la variable Log(SalePrice)
 
-```{r}
+```{r} # DELETE ¿?
 for (feature in names(filtered_lost_values_info)) {
     categories <- train[, feature]
     print(ggplot(data = train, aes(x = feature, y = log(SalePrice), fill = categories)) +
@@ -120,10 +127,11 @@ for (feature in names(filtered_lost_values_info)) {
 - Examinamos la distribución de las variables continuas con respecto a Log(SalePrice)
 
 ```{r}
-numeric_features <- numeric <- names(train)[which(sapply(train, is.numeric))]
-numeric_feature_with_lost_values <- intersect(numeric_features, names(filtered_lost_values_info))
+lost.values.features <- rownames(getLostValuesStats())
+numeric.features <- names(train)[which(sapply(train, is.numeric))]
+lost.values.features.numeric <- dplyr::intersect(numeric.features, lost.values.features)
 
-plots <- lapply(numeric_feature_with_lost_values, function(feature) {
+plots <- lapply(lost.values.features.numeric, function(feature) {
     ggplot(data = train, aes(x = train[, feature], y = log(train$SalePrice))) +
           geom_point() +
           geom_smooth(method = "lm") +
@@ -131,11 +139,10 @@ plots <- lapply(numeric_feature_with_lost_values, function(feature) {
           ylab(label = "Log(SalePrice)")
 })
 
-cowplot::plot_grid(plotlist = plots, ncol = 2)
+cowplot::plot_grid(plotlist = plots, ncol = 3)
 ```
 
-
-## Tratamiento de los valores perdidos
+# Tratamiento de los valores perdidos
 
 - GarageYrBlt
 
@@ -148,6 +155,8 @@ ggplot(data = full.set, aes(x = GarageYrBlt, y = YearBuilt)) +
 
 full.set$GarageYrBlt[full.set$GarageYrBlt == 2207] <- 2007
 full.set$GarageYrBlt[is.na(full.set$GarageYrBlt)] <- full.set$YearBuilt[is.na(full.set$GarageYrBlt)]
+
+updatePartitions()
 ```
 
 - LotFrontage
@@ -155,28 +164,35 @@ full.set$GarageYrBlt[is.na(full.set$GarageYrBlt)] <- full.set$YearBuilt[is.na(fu
 Por lógica, se puede decir que el área de la propiedad con la longitud de la fachada. Para confirmarlo, comprobamos la correlación entre ellas:
 
 ```{r}
-cor(train$LotFrontage, train$LotArea, use = "complete.obs")
-cor(log(train$LotFrontage), log(train$LotArea), use = "complete.obs")
+cor(full.set$LotFrontage, full.set$LotArea, use = "complete.obs")
+cor(log(full.set$LotFrontage), log(full.set$LotArea), use = "complete.obs")
 ```
 
 Y visualizamos su relación:
 
 ```{r}
-ggplot(data = train, aes(x = train$LotArea, y = train$LotFrontage)) +
+plotLotRelation <- ggplot(data = full.set, aes(x = LotArea, y = LotFrontage)) +
     geom_point() +
     geom_smooth(method = "lm")
 
-ggplot(data = train, aes(x = log(train$LotArea), y = log(train$LotFrontage))) +
+plotLogLotRelation <- ggplot(data = full.set, aes(x = log(LotArea), y = log(LotFrontage))) +
           geom_point() +
           geom_smooth(method = "lm")
+
+cowplot::plot_grid(plotLotRelation, plotLogLotRelation, ncol = 2)
 ```
 
 Se puede confirmar que existe una alta correlación directa entre *LotFrontage* con *LotArea*. Dado, que estas dos propiedades están relacionadas, seguramente una de ellas sea desechada en el proceso de selección de variables. Idependientemente de ello, en este paso sustituiremos los valores de *LotFrontage*, por la mediana de los valores existentes.
 
 ```{r}
-train$LotFrontage[is.na(train$LotFrontage)] <- median(train$LotFrontage[!is.na(train$LotFrontage)])
-cor(train$LotFrontage, train$LotArea, use = "complete.obs")
-cor(log(train$LotFrontage), log(train$LotArea), use = "complete.obs")
+full.set$LotFrontage[is.na(full.set$LotFrontage)] <- mean(full.set$LotFrontage[!is.na(full.set$LotFrontage)])
+
+updatePartitions()
+```
+
+```{r}
+cor(full.set$LotFrontage, full.set$LotArea, use = "complete.obs")
+cor(log(full.set$LotFrontage), log(full.set$LotArea), use = "complete.obs")
 ```
 
 Observamos que la correlación continúa siendo similar después de tratar los valores perdidos en *LotFrontage*.
@@ -184,38 +200,47 @@ Observamos que la correlación continúa siendo similar después de tratar los v
 **TODO:** Quizás remplazar con la media no sea la mejor opción (cambia bastante la correlación). Si no se encuentra una solución mejor, quizás habría que cargarse directamente la variable.
 
 ```{r}
-ggplot(data = train, aes(x = log(train$LotArea), y = log(train$LotFrontage))) +
+ggplot(data = full.set, aes(x = log(LotArea), y = log(LotFrontage))) +
           geom_point() +
           geom_smooth(method = "lm")
 ```
 
 - MasVnrArea
+
 Existe una gran cantidad de entradas con valor 0. Esto seguramente se deba a la carencia de "chapado":
+
 ```{r}
-qplot(data = train, x = log(MasVnrArea), y = log(SalePrice), col = MasVnrType)
+ggplot2::qplot(data = train, x = log(MasVnrArea), y = log(SalePrice), col = MasVnrType)
 ```
 
 También observamos que en ambas variables los valores perdidos (8) forman parte de los mismos ejemplos:
+
 ```{r}
-ifelse(train$Id[is.na(train$MasVnrArea)] == train$Id[is.na(train$MasVnrType)], "Equals", "Non equals")
+full.set$Id[is.na(full.set$MasVnrArea)]
+full.set$Id[is.na(full.set$MasVnrType)]
 ```
 
+# TODO: hay una entrada más en el conjunto de test
 Por consiguiente, se elimina la caraterística *MasVnrArea*, ya que las entradas con valor 0, por ser del tipo "None", hacen que la información desprendida de la variable esté "deformada".
 
 ```{r}
-train <- dplyr::select(train, - MasVnrArea)
+full.set <- dplyr::select(full.set, - MasVnrArea)
+
+updatePartitions()
 ```
 
 Ahora se deben tratar los valores perdidos de *MasVnrType*. Para ello, observamos *MasVnrType* en relación a *SalePrice* para entender su distribución.
 
 ```{r}
-qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
+qplot(data = train, x = MasVnrType, y = log10(SalePrice), geom = c("boxplot"), fill = MasVnrType)
 ```
 
 Asignamos a los valores perdidos el tipo "BrkFace", por mayor proximidad de sus medias. Aunque también se les podría asignar el tipo "Stone".
 
 ```{r}
-train$MasVnrType[is.na(train$MasVnrType)] <- "BrkFace"
+full.set$MasVnrType[is.na(full.set$MasVnrType)] <- "BrkFace"
+
+updatePartitions()
 ```
 
 Finalmente, observamos la distribución resultante en las categorías de *MasVnrType* en relación a *SalePrice*.
@@ -226,12 +251,10 @@ qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("
 
 ## Variables categóricas
 
-
 Las siguientes caraterísticas con valores perdidos se corresponden con aquellas que contienen entradas en las que hay una ausencia de la propiedad a la que representan. Por ejemplo, la propiedad *PoolQC* representa la calidad de la piscina, pero es obvio que en aquellas propiedades en las haya una ausencia de piscina, será inviable representar su calidad. Por consiguiente, se le asignarán el tipo "None" a aquellos valores ausentes (NA). Las caracteríasticas que contienen este tipo de valores perdidos son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
 
 ```{r}
-none_types <-
-    c(
+none_types <- c(
   "PoolQC",
   "MiscFeature",
   "Alley",
@@ -249,22 +272,24 @@ none_types <-
   )
 
 for (none in none_types) {
-    if (is.factor(train[, none])) {
-        train[, none] <- as.character(train[, none])
-        train[, none][which(is.na(train[, none]))] <- "None"
-        train[, none] <- factor(train[, none])
-    } else {
-        print(length(train[, none][is.na(train[, none])]))
-        train[, none][is.na(train[, none])] <- "None"
+    if (is.factor(full.set[, none])) {
+        full.set[, none] <- as.character(full.set[, none])
+        full.set[, none][which(is.na(full.set[, none]))] <- "None"
+        full.set[, none] <- factor(full.set[, none])
     }
 }
+
+updatePartitions()
 ```
 
 - Electrical
+
 Esta característica presenta un valor perdido. Dada la mínima influencia que puede tener, se le asigna la categoría mayoritaria.
 
 ```{r}
-train$Electrical[is.na(train$Electrical)] <- as.character(sort(train$Electrical, decreasing = TRUE)[1])
+full.set$Electrical[is.na(full.set$Electrical)] <- as.character(sort(full.set$Electrical, decreasing = TRUE)[1])
+
+updatePartitions()
 ```
 
 # Corrección de valores perdidos en el conjunto de test
@@ -272,67 +297,38 @@ train$Electrical[is.na(train$Electrical)] <- as.character(sort(train$Electrical,
 En primer lugar, se examinan los valores perdidos que presenta el conjunto de test y se visualizan de la misma forma que se procedió con el conjunto de entrenamiento.
 
 ```{r}
-na_info_test <- apply(is.na(test), 2, sum)
-lost_values_info_test <- which(na_info_test > 0)
-filtered_lost_values_info_test <- na_info_test[lost_values_info_test]
-df_filtered_lost_values_info_test <- data.frame(filtered_lost_values_info_test)
-
-# TODO: Change and add a histogram
-ggplot() +
-    geom_point(aes(x = rownames(df_filtered_lost_values_info_test), y = df_filtered_lost_values_info_test$filtered_lost_values_info_test)) +
-    geom_hline(yintercept = nrow(test) * 0.05, color = 'pink') +
-    geom_hline(yintercept = nrow(test) * 0.10, color = 'orange') +
-    geom_hline(yintercept = nrow(test) * 0.20, color = 'blue') +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-    xlab('Features with lost values') +
-    ylab('Number of lost values')
+getLostValuesStats()
 ```
 
-En las caraterísticas que presenten valores perdidos y ya se haya examinado previamente, se proceden a tratar de la misma forma para realizar un procedimiento consistente.
-
-```{r}
-for (none in none_types) {
-    if (is.factor(test[, none])) {
-        test[, none] <- as.character(test[, none])
-        test[, none][which(is.na(test[, none]))] <- "None"
-        test[, none] <- factor(test[, none])
-    } else {
-        print(length(test[, none][is.na(test[, none])]))
-        test[, none][is.na(test[, none])] <- "None"
-    }
-}
-
-test$GarageYrBlt[is.na(test$GarageYrBlt)] <- test$YearBuilt[is.na(test$GarageYrBlt)]
-test$LotFrontage[is.na(test$LotFrontage)] <- median(test$LotFrontage[!is.na(test$LotFrontage)])
-test <- dplyr::select(test, - MasVnrArea)
-test$MasVnrType[is.na(test$MasVnrType)] <- "Stone"
-```
-
+# TODO: ¿En las caraterísticas que presenten valores perdidos y ya se haya examinado previamente, se proceden a tratar de la misma forma para realizar un procedimiento consistente?
 Así mismo, se procede a tratar las demás variables. Por una parte, se procesan las de tipo numérico, asignando la mediana a los valores faltantes.
 
 ```{r}
-lost_test <- c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea")
+lost.test.numeric.features <- c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea")
 
-for (lost in lost_test) {
-    test[, lost][is.na(test[, lost])] <- median(test[, lost][!is.na(test[, lost])])
+for (feature in lost.test.numeric.features) {
+    full.set[, feature][is.na(full.set[, feature])] <- median(full.set[, feature][!is.na(full.set[, feature])])
 }
+
+updatePartitions()
 ```
 
 En cuanto a las variables de tipo nominal, se les asigna la moda de sus valores.
 
 ```{r}
-lost_nominal_test <- c("Exterior1st", "Exterior2nd", "Functional", "KitchenQual", "MSZoning", "SaleType", "Utilities")
+lost.test.categorical.features <- c("Exterior1st", "Exterior2nd", "Functional", "KitchenQual", "MSZoning", "SaleType", "Utilities")
 
-for (lost in lost_nominal_test) {
-    test[, lost][is.na(test[, lost])] <- as.character(sort(test[, lost], decreasing = T)[1])
+for (feature in lost.test.categorical.features) {
+    full.set[, feature][is.na(full.set[, feature])] <- as.character(sort(full.set[, feature], decreasing = T)[1])
 }
+
+updatePartitions()
 ```
 
 Antes de continuar, comprobamos que no hay valores perdidos en ninguno de los dos conjuntos.
 
 ```{r}
-sum(is.na(train))
-sum(is.na(test))
+getLostValuesStats()
 ```
 
 # Transformación de datos
@@ -340,31 +336,39 @@ sum(is.na(test))
 En primer lugar, se procede a eliminar la propiedad Id de los conjuntos de entrenamiento y test.
 
 ```{r}
-transformed_train <- dplyr::select(train, - Id)
-transformed_test <- dplyr::select(test, - Id)
+train.transformed <- dplyr::select(train, - Id)
+test.transformed <- dplyr::select(test, - Id)
 ```
 
 # Tratamiento de outliers
 
 ```{r}
-ggplot(transformed_train, aes(y = SalePrice, x = GrLivArea)) + ggtitle("With Outliers") + geom_point()
-ggplot(transformed_train, aes(y = log(SalePrice), x = log(GrLivArea))) + ggtitle("With Outliers (Log())") + geom_point()
+plot.with.outliers <- ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + ggtitle("With Outliers") + geom_point()
+plot.with.outliers.log <- ggplot(train.transformed, aes(y = log(SalePrice), x = log(GrLivArea))) + ggtitle("With Outliers (Log())") + geom_point()
+cowplot::plot_grid(plot.with.outliers, plot.with.outliers.log, ncol = 2)
 
-transformed_train[transformed_train$GrLivArea > 4000,]$GrLivArea <- mean(transformed_train$GrLivArea) %>% as.numeric
-ggplot(transformed_train, aes(y = SalePrice, x = GrLivArea)) + ggtitle("Without Outliers") + geom_point()
+train.transformed[train.transformed$GrLivArea > 4000,]$GrLivArea <- mean(train.transformed$GrLivArea) %>% as.numeric
+
+ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + ggtitle("Without Outliers") + geom_point()
 ```
 
-
-```{r} # TODO: Delete due move
-train.dt <- transformed_train
-test.dt <- cbind(transformed_test, SalePrice = as.integer(NA))
-full.dt <- data.table::rbindlist(list(train.dt, test.dt), use.names = F, fill = F)
-```
-
-- Creación de una nueva variable: Area total basement xd
 
 ```{r}
-full.dt$TotalSF = full.dt$TotalBsmtSF + full.dt$X1stFlrSF + full.dt$X2ndFlrSF
+full.set.transformed <- data.frame(data.table::rbindlist(list(train.transformed, test.transformed), use.names = F, fill = F))
+```
+
+- Feature engeneriing
+
+Creación de una nueva variable: Area total basement e
+
+```{r}
+full.set.transformed <- dplyr::select(full.set.transformed, - LotFrontage)
+
+full.set.transformed$TotalSF = full.set.transformed$TotalBsmtSF + full.set.transformed$X1stFlrSF + full.set.transformed$X2ndFlrSF
+
+full.set.transformed$Age <- full.set.transformed$YrSold - full.set.transformed$YearRemodAdd
+
+full.set.transformed$TotalProch <- full.set.transformed$EnclosedPorch + full.set.transformed$ScreenPorch + full.set.transformed$X3SsnPorch
 ```
 
 ## Regularización de las variables continuas
@@ -374,21 +378,11 @@ Tal y como se ha mostrado, la variable *SalePrice* contiene una distribución as
 Así mismo, se procede a mostrar diagramas de densidad de cada una de las características que contengan datos númericos. De esta forma se podrá observa que transformaciones pueden ser convenientes de hacer a cada variable.
 
 ```{r}
-full.dt$SalePrice <- log(full.dt$SalePrice) # TODO: CHECK THIS :S
-
-for (feature in names(transformed_train)) {
-    if (is.numeric(transformed_train[, feature])) {
-        print(ggplot2::ggplot(data = transformed_train, aes(x = transformed_train[, feature])) +
-                      geom_density() +
-                      xlab(feature))
-    }
-}
+full.set.transformed$SalePrice <- log(full.set.transformed$SalePrice)
 ```
 
-
-Let's normalize the continuous values
 ```{r}
-variablesSquareFootage <- c(
+continuous.features <- c(
   "LotFrontage", ## Linear feet of street connected to property 
   "LotArea", ## Lot size in square feet
   "BsmtFinSF1", ## Type 1 finished square feet    
@@ -408,202 +402,150 @@ variablesSquareFootage <- c(
   "PoolArea" ## Pool area in square feet
 )
 
-full.dt[, variablesSquareFootage] <- log(1 + full.dt[, variablesSquareFootage, with = FALSE])
+plots <- lapply(continuous.features, function(feature) {
+    if (is.numeric(full.set.transformed[, feature])) {
+        ggplot2::ggplot(data = full.set.transformed, aes(x = full.set.transformed[, feature])) +
+                      geom_density() +
+                      xlab(feature)
+    }
+})
+
+cowplot::plot_grid(plotlist = plots, ncol = 3)
+```
+
+Let's normalize the continuous values
+
+```{r}
+full.set.transformed[, continuous.features] <- log(1 + full.set.transformed[, continuous.features])
+
+plots <- lapply(continuous.features, function(feature) {
+    if (is.numeric(full.set.transformed[, feature])) {
+        ggplot2::ggplot(data = full.set.transformed, aes(x = full.set.transformed[, feature])) +
+                      geom_density() +
+                      xlab(feature)
+    }
+})
+
+cowplot::plot_grid(plotlist = plots, ncol = 3)
+```
+
+Center & scale....
+
+```{r}
+full.set.preProcessed <- caret::preProcess(select(full.set.transformed, - SalePrice), method = c("center", "scale"))
+full.set.transformed <- predict(full.set.preProcessed, full.set.transformed)
+```
+
+Cambiado las variable categóricas por numéricas
+# TODO: Buscar explicación
+
+```{r}
+for (i in 1:ncol(full.set.transformed)) {
+    if (is.factor(full.set.transformed[, i])) {
+        levels(full.set.transformed[, i]) <- c(1:length(levels(full.set.transformed[, i])))
+        full.set.transformed[, i] <- as.numeric(full.set.transformed[, i])
+    }
+}
 ```
 
 ```{r}
-full.dt <- data.frame(full.dt)
-for (i in 1:ncol(full.dt)) {
-    if (is.factor(full.dt[, i])) {
-        levels(full.dt[, i]) <- c(1:length(levels(full.dt[, i])))
-        full.dt[, i] <- as.numeric(full.dt[, i])
-    }
-}
-
-feature_classes <- sapply(names(full.dt), function(x) {
-    class(full.dt[, x])
+features.class <- sapply(names(full.set.transformed), function(feature) {
+    class(full.set.transformed[, feature])
 })
-numeric_feats <- names(feature_classes[feature_classes != "character"])
-skewed_feats <- sapply(numeric_feats, function(x) {
-    e1071::skewness(full.dt[, x], na.rm = TRUE)
-})
-skewed_feats <- skewed_feats[abs(skewed_feats) > 0.75]
-for (x in names(skewed_feats)) {
-    bc = caret::BoxCoxTrans(full.dt[, x], lambda = 0.15)
-    full.dt[, x] = predict(bc, full.dt[, x])
-}
+features.class.numeric <- names(features.class[features.class != "character"])
 
-full.dt.processed <- predict(caret::preProcess(select(full.dt, - SalePrice),
-    method = c("center", "scale")), full.dt)
+features.class.numeric.skewed <- sapply(features.class.numeric, function(feature) {
+    e1071::skewness(full.set.transformed[, feature], na.rm = TRUE)
+})
+features.class.numeric.skewed <- features.class.numeric.skewed[abs(features.class.numeric.skewed) > 0.75]
+
+for (feature in names(features.class.numeric.skewed)) {
+    box.cox = caret::BoxCoxTrans(full.set.transformed[, feature], lambda = 0.15)
+    full.set.transformed[, feature] = predict(box.cox, full.set.transformed[, feature])
+}
 ```
 
 - Spliting into train and test
 
 ```{r}
-train.dt.processed <- full.dt.processed[1:nrow(train.dt),]
-test.dt.processed <- full.dt.processed[(nrow(train.dt) + 1):nrow(full.dt.processed),]
-test.dt.processed <- dplyr::select(test.dt.processed, - SalePrice)
+train.processed <- full.set.transformed[1:nrow(train.transformed),]
+test.processed <- full.set.transformed[(nrow(train.transformed) + 1):nrow(full.set.transformed),]
+test.processed <- dplyr::select(test.processed, - SalePrice)
+```
+
+- lm.....
+
+```{r}
+exploratory.lm = lm(SalePrice ~ ., data = train.processed)
+
+par(mfrow = c(2, 2))
+plot(exploratory.lm)
+par(mfrow = c(1, 1))
+```
+
+```{r}
+importance <- caret::varImp(exploratory.lm)
+importance.sort <- sort(importance$Overall, decreasing = TRUE, index.return = TRUE)
+
+data.frame("Feature" = rownames(importance)[importance.sort$ix], "Overall" = importance[importance.sort$ix,])[1:15, ]
 ```
 
 ## Entrenamiento
 
-```{r}
-in_train <- createDataPartition(train.dt.processed$SalePrice, p = 0.7, list = F)
-partial.train <- train.dt.processed[in_train,]
-validation <- train.dt.processed[-in_train,]
-```
-
 - Entrenamiento "parcial"
 
 ```{r}
-set.seed(12345)
-model <- caret::train(SalePrice ~ .,
-  data = partial.train,
-  method = 'gbm', # svmRadial # xgbLinear # glmnet #svmLinear2
+train.processed.partition.index <- createDataPartition(train.processed$SalePrice, p = 0.7, list = FALSE)
+train.processed.partition.train <- train.processed[train.processed.partition.index,]
+train.processed.partition.validation <- train.processed[-train.processed.partition.index,]
+```
+
+```{r}
+model.partial <- caret::train(SalePrice ~ .,
+  data = train.processed.partition.train,
+  method = 'gbm',
   trControl = caret::trainControl(
   method = 'repeatedcv',
   number = 10,
   repeats = 1
   ))
 
-model
+model.partial
 ```
 
 - Validación del modelo
 
 ```{r}
-validation.prediction <- stats::predict(model, validation)
-ggplot2::qplot(x = exp(validation.prediction), y = exp(validation$SalePrice),
-               geom = c("point", "smooth"), method = "lm",
-               xlab = "Paredicted", ylab = "Real")
+predictAndEvaluate <- function(model, validation.set) {
+    validation.prediction <- stats::predict(model, dplyr::select(validation.set, - SalePrice))
 
-rmse(validation$SalePrice, validation.prediction)
+    print(ggplot2::qplot(x = validation.prediction, y = validation.set$SalePrice,
+               geom = c("point", "smooth"), method = "lm",
+               xlab = "Predicted", ylab = "Real"))
+
+    rmse(validation.set$SalePrice, validation.prediction) # 0.1344078
+}
 ```
 
 ```{r}
-rediduals <- (validation$SalePrice - validation.prediction)
-qplot(validation$SalePrice - validation.prediction,)
-```
-
-- Variable importance
-
-```{r} # SKIP
-model.variable.importance <- caret::varImp(model)
-ggplot2::ggplot(model.variable.importance) + geom_density()
-```
-
-```{r} # SKIP
-best.predictor.importance.index <- model.variable.importance$importance %>% mutate(names = row.names(.)) %>% arrange(-Overall)
-
-best.predictor.importance.variables <- c("SalePrice", best.predictor.importance.index$names[1:10])
+predictAndEvaluate(model.partial, train.processed.partition.validation) # 0.134816
 ```
 
 Trying to improve model ...
 
 ```{r}
-# best.predictor.importance.data <- train_pre_processed_values[, best.predictor.importance.variables]
-
-model <- caret::train(SalePrice ~ .,
-  data = train.dt.processed,
-  method = 'gbm', # svmRadial # xgbLinear # glmnet #svmLinear2
-  trControl = caret::trainControl(
-  method = 'repeatedcv',
-  number = 10,
-  repeats = 1
-  ))
-
-model
-```
-
-## Prediction
-
-```{r}
-# t <- select(test.dt.processed, - Id)
-test.prediction <- stats::predict(model, test.dt.processed)
-```
-
-## Submiting data
-
-```{r}
-prediction.table <- data.frame(Id = test$Id, SalePrice = exp(test.prediction))
-write.csv(prediction.table, paste0('with_preValidation', "_predictions_1", ".csv"), row.names = F)
-```
-
-
-######## MORE ##################
-
-```{r}
-library(vtreat)
-library(caretEnsemble)
-
-features <- setdiff(names(full.dt), c("SalePrice", "Id", "dataPartition")) #Check in original code
-treatplan <- vtreat::designTreatmentsZ(train.dt.processed, minFraction = 0.01, rareCount = 0, features, verbose = FALSE)
-train.full.treat <- prepare(treatplan, dframe = train.dt.processed, codeRestriction = c("clean", "lev"))
-test.treat <- prepare(treatplan, dframe = test.dt.processed, codeRestriction = c("clean", "lev"))
-
-trControl <- trainControl(
+ensembleTrain <- function(train.set) {
+    trControl <- trainControl(
         method = "cv",
         number = 7,
         savePredictions = "final",
-        index = createResample(train.dt.processed$OverallQual, 7),
+        index = createResample(train.set$OverallQual, 7),
         allowParallel = TRUE
-)
-xgbTreeGrid <- expand.grid(nrounds = 400, max_depth = 3, eta = 0.1, gamma = 0, colsample_bytree = 1.0, subsample = 1.0, min_child_weight = 4)
-glmnetGridElastic <- expand.grid(.alpha = 0.3, .lambda = 0.009) ## notice the . before the parameter
-glmnetGridLasso <- expand.grid(.alpha = 1, .lambda = seq(0.001, 0.1, by = 0.001))
-glmnetGridRidge <- expand.grid(.alpha = 0, .lambda = seq(0.001, 0.1, by = 0.001))
-```
+    )
 
-```{r}
-# Write a function that gets a data set and converts all factor variables to dummy variables
-convert.to.dummy <- function(data.set) {
-    data.set <- data.frame(data.set)
-    cat.var <- NULL
-    temp.data <- data.frame(1:nrow(data.set))
-    for (i in 1:ncol(data.set)) {
-        if (class(data.set[, i]) == "factor") {
-            cat.var <- c(cat.var, i)
-            factor.levels <- levels(data.set[, i]) # Try to find a way to classify NA's as "NO" otherwise they generate problem downstream
-            # First check if there is any 'NA-level'
-            if (any(is.na(data.set[, i]))) {
-                dummy.vector = ifelse(is.na(data.set[, i]), 1, 0)
-                dummy.vector <- data.frame(dummy.vector)
-                colnames(dummy.vector)[1] = paste("NO", names((data.set)[i]), sep = ".")
-                temp.data <- cbind(temp.data, dummy.vector)
-            }
-
-            for (j in seq_along(factor.levels)) {
-                # Then deal with normal factor levels
-                dummy.vector = ifelse(data.set[, i] == factor.levels[j], 1, 0)
-
-                #Since we already dealt with NAs above
-                if (any(is.na(dummy.vector))) { dummy.vector[is.na(dummy.vector)] <- 0 }
-
-                dummy.vector <- data.frame(dummy.vector)
-                colnames(dummy.vector)[1] = paste(names((data.set)[i]),
-                                                                  factor.levels[j], sep = ".")
-                temp.data <- cbind(temp.data, dummy.vector)
-            }
-        }
-    }
-    #Remove the original categorical variables from data.set
-    data.set <- data.set[, - cat.var]
-    #Add the dummy.variable set
-    temp.data <- temp.data[, -1] # remove the unnecessary column
-    data.set <- cbind(data.set, temp.data)
-
-    return(data.set)
-}
-
-training.processed.dummy <- convert.to.dummy(train.dt.processed)
-test.dt.processed.dummy <- convert.to.dummy(test.dt.processed)
-```
-
-```{r}
-set.seed(333)
-modelList <<- caretEnsemble::caretList(
+    modelList <- caretEnsemble::caretList(
                   SalePrice ~ .,
-                  data = train.dt.processed,
+                  data = train.set,
                   trControl = trControl,
                   metric = "RMSE",
                   tuneList = list(
@@ -612,21 +554,35 @@ modelList <<- caretEnsemble::caretList(
     xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = expand.grid(nrounds = 2500, max_depth = 6, min_child_weight = 1.41,
                                                                   eta = 0.01, gamma = 0.0468, subsample = 0.769,
                                                                   colsample_bytree = 0.283))
-## Do not use custom names in list. Will give prediction error with greedy ensemble. Bug in caret.
-#xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = xgbTreeGrid, nthread = 8),
-#glmnet=caretModelSpec(method="glmnet", tuneGrid = glmnetGridElastic), ## Elastic, highly correlated with lasso and ridge regressions
-# glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridLasso), ## Lasso
-# glmnet = caretModelSpec(method = "glmnet", tuneGrid = glmnetGridRidge) ## Ridge
-#svmLinear3= caretModelSpec(method="svmLinear3", tuneLenght = 20) ## SVM 
-                          )
-)
+    ))
 
-greedy_ensemble <- caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
+    greedy_ensemble <- caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
+
+    return(greedy_ensemble)
+}
 ```
 
 ```{r}
-predictions <- predict(greedy_ensemble, newdata = test.dt.processed)
+model.ensemble <- ensembleTrain(train.processed.partition.train2)
+```
+
+```{r}
+model.ensemble # 0.1322569
+predictAndEvaluate(model.ensemble, train.processed.partition.validation2) # 0.1230385
+```
+
+## Full train
+
+```{r}
+model.full <- ensembleTrain(train.processed)
+model.full
+```
+
+## Prediction and submit
+
+```{r}
+predictions <- predict(model.full, newdata = test.processed)
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(predictions))
-write.csv(prediction.table, paste0('complex', "_predictions_3", ".csv"), row.names = F)
+write.csv(prediction.table, "clean_prediction_3.csv", row.names = FALSE)
 ```
 

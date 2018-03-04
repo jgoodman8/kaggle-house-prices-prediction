@@ -529,6 +529,7 @@ Dado que nuestro conjunto de test no contiene información de la variable clase 
 Por lo tanto, se realiza una partición del conjunto de entrenamiento de forma que generemos dos nuevos subconjutos. Es decir, un nuevo subconjunto de entrenamiento (70% de las intancias del conjunto de entrenamiento original) y otro subconjunto de validación (formado por el 30% de intancias restantes).
 
 ```{r}
+set.seed(SEED)
 train.processed.partition.index <- createDataPartition(train.processed$SalePrice, p = 0.7, list = FALSE)
 train.processed.partition.train <- train.processed[train.processed.partition.index,]
 train.processed.partition.validation <- train.processed[-train.processed.partition.index,]
@@ -616,22 +617,21 @@ Se puede observar que tanto en el conjunto de entrenamiento como en el de valida
 
 ```{r}
 model.ensemble <- ensembleTrain(train.processed.partition.train)
-model.ensemble # 0.1191271
-predictAndEvaluate(model.ensemble, train.processed.partition.validation) # 0.1376281
+model.ensemble
+predictAndEvaluate(model.ensemble, train.processed.partition.validation)
 ```
 
 # Entrenamiento y predicción
 
-Finalmente, se procede al entrenamiento de la totalidad del conjunto de entrenamiento y a su predicción. El valor de *RMSE* obtenido en la plataforma Kaggle es de XXXX, por un XXX obtenido en el conjunto de entrenamiento. Ámbos son unos valores muy silimares, lo que nos confirma la ausencia de bias y varianza en el modelo contruido.
+Finalmente, se procede al entrenamiento de la totalidad del conjunto de entrenamiento y a su predicción. El valor de *RMSE* obtenido en la plataforma Kaggle es de 0.12332, por un 0.1257321 obtenido en el conjunto de entrenamiento. Ámbos son unos valores muy silimares, lo que nos confirma la ausencia de bias y varianza en el modelo contruido.
 
 ```{r}
 model.full <- ensembleTrain(train.processed)
-model.full # 0.1257321
+model.full
 
 predictions <- predict(model.full, newdata = test.processed)
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(predictions))
-write.csv(prediction.table, "prediction.csv", row.names = FALSE) # 0.12332
-# print(prediction.table)
+write.csv(prediction.table, "prediction.csv", row.names = FALSE)
 ```
 
 # Referencias

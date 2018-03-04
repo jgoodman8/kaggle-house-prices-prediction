@@ -447,7 +447,7 @@ plots <- lapply(continuous.features, function(feature) {
 cowplot::plot_grid(plotlist = plots, ncol = 3)
 ```
 
-Let's normalize the continuous values
+Se aprecia una clara desviación en las distribuciones. Por consiguiente, aplicamos logaritmos a las caraterísticas de forma que en muchos casos obtenemos unas distribuciones más uniformes. Nótese que además se suma 1 a los datos, con el fin de evitar la operación *log(0)*.
 
 ```{r}
 full.set.transformed[, continuous.features] <- log(1 + full.set.transformed[, continuous.features])
@@ -465,7 +465,7 @@ cowplot::plot_grid(plotlist = plots, ncol = 3)
 
 ### Otras transformaciones
 
-Center & scale....
+Con el fin de normalizar más los datos, se procede a aplicar un centrado y escalado de los conjunto de datos (extrayendo la variable clase).
 
 ```{r}
 set.seed(SEED)
@@ -473,8 +473,7 @@ full.set.preProcessed <- caret::preProcess(select(full.set.transformed, - SalePr
 full.set.transformed <- predict(full.set.preProcessed, full.set.transformed)
 ```
 
-Cambiado las variable categóricas por numéricas
-# TODO: Buscar explicación
+Algunos tipos de métodos analíticos que tienen problemas al tratar variables categóricas. Por lo tanto, se procede a la conversión de dicho tipo de variables a numéricas. Para ello, se asigna a cada categoría un entero, generado de forma incremental en cada característica.
 
 ```{r}
 for (i in 1:ncol(full.set.transformed)) {
@@ -485,7 +484,16 @@ for (i in 1:ncol(full.set.transformed)) {
 }
 ```
 
-- Spliting into train and test
+Así mismo, se ha observado que hay variables con una varianza muy cercana a 0. Aunque se utilizarán árboles de decisión para el modelado, este tipo de características suelen ser problemáticas y pueden hacer "quebrar" el modelo o volverlo inestable. Por consiguiente, se procede a indentificar dichas variables y eliminarlas.
+
+```{r}
+near.zero.features.index <- caret::nearZeroVar(full.set.transformed)
+full.set.transformed <- full.set.transformed[, - near.zero.features.index]
+```
+
+# Entrenamiento del modelo
+
+En primer lugar, se procede a volver a obtener los subconjuntos de entrenamiento y de test.
 
 ```{r}
 train.processed <- full.set.transformed[1:nrow(train.transformed),]
@@ -493,7 +501,7 @@ test.processed <- full.set.transformed[(nrow(train.transformed) + 1):nrow(full.s
 test.processed <- dplyr::select(test.processed, - SalePrice)
 ```
 
-- lm
+De forma exploratoria, se procede a relizar una sencilla regresión linear y analizar la uniformación desprendida de su resultado.
 
 ```{r}
 exploratory.lm = lm(SalePrice ~ ., data = train.processed)
@@ -509,8 +517,6 @@ importance.sort <- sort(importance$Overall, decreasing = TRUE, index.return = TR
 
 data.frame("Feature" = rownames(importance)[importance.sort$ix], "Overall" = importance[importance.sort$ix,])[1:15,]
 ```
-
-## Entrenamiento
 
 - Entrenamiento "parcial"
 

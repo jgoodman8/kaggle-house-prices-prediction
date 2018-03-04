@@ -10,9 +10,19 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
 ```
 
-# Inspección de los datos
+# Introducción
+
+El objetivo de este documento es el realizar una predicción de precios de ventas de propiedades inmobiliarias, en base al [problema](https://www.kaggle.com/c/house-prices-advanced-regression-techniques) publicado en la plataforma Kaggle. Por consiguiente, el objetivo de minería de datos será: la construcción de un modelo inteligible que obtenga una estimación lo más precisa posible del atributo clase *"SalePrice"*, a partir del resto. El nombre de usuario empleado en la plataforma Kaggle es **CDAA17JGFigueira**.
+
+## Carga de liberías y datos
+
+Previante a realizar un análisis de los datos, se procede a cargar las liberías de R requeridas para su realización. Así mismo, se cargan los conjuntos de datos de entrenamiento y tests.
 
 ```{r, echo=FALSE}
+setwd("C:/Users/cento/Documents/MasterUIMP/Practicas/aprendizajeautomatico/kaggle_house_prices")
+```
+
+```{r}
 required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
 if (length(new_packages)) install.packages(new_packages)
@@ -29,14 +39,32 @@ library(cowplot)
 library(caretEnsemble)
 
 SEED <- 12345
-setwd("C:/Users/cento/Documents/MasterUIMP/Practicas/aprendizajeautomatico/kaggle_house_prices")
 train <- read.csv("data/train.csv")
 test <- read.csv("data/test.csv")
-full.set <- data.frame(data.table::rbindlist(list(train, cbind(test, SalePrice = as.integer(NA))),
-                                             use.names = F, fill = F))
 ```
 
+# Inspección de los datos
+
+## Análisis preliminar
+
+Como primer paso del proceso, se procede a realizar un análisis de los datos. Para ello, es necesario conocer las dimensiones del conjunto de entrenamiento.
+
 ```{r}
+dim(train)
+dim(test)
+```
+
+Se observa que el número de instancias del conjunto de entrenamiento contiene prácticamente el mismo número de instancias que el conjunto de test. Sin embargo, este último contiene una variable menos, que se corresponde con la ausencia de variable clase *SalePrice*.
+
+Teniendo en cuenta que en el futuro se harán distintas modificaciones sobre los datos y éstas se deberían realizar teniendo en cuenta el conjunto total de los datos, se procede a juntar los dos conjuntos. Para ello, rellenamos con *NA* los valores ausentes del conjunto de test. Por consiguiente, cuando se realice una operación que tenga en cuenta la variable *SalePrice* (por ejemplo: la correlación entre una de las características y la variable clase), sólo se podrá realizar sobre el subconjunto de test.
+
+Para tener actualizadas ambos subconjuntos, se defina la función *updatePartitions*. De esta forma, todas las operaciones que se apliquen al total de los datos, se verán reflejadas en ambas particiones.
+
+```{r}
+full.set <- data.frame(data.table::rbindlist(list(train, cbind(test, SalePrice = as.integer(NA))),
+                                             use.names = F, fill = F))
+dim(full.set)
+
 updatePartitions <- function() {
     train.size <- nrow(train)
     full.set.size <- nrow(full.set)
@@ -46,59 +74,19 @@ updatePartitions <- function() {
 }
 ```
 
-Las dimensiones del conjunto de entrenamiento son las siguientes:
-
-```{r}
-dim(train)
-dim(test)
-dim(full.set)
-```
-
-A continuacin, procedemos a examinar las variables del dataset:
+A continuacin, procedemos a examinar las variables del dataset y observamos que coinciden con las descritas por la [plataforma](https://www.kaggle.com/c/5407/download/data_description.txt).
 
 ```{r}
 str(full.set)
 ```
 
-Y observamos el inicio:
+Así mismo, observamos la información relevante del dataset para tener una idea de sus características. Se aprecia presencia de tanto características numéricas continuas, como ordinálisis y categóricas. También se aprecia una gran presencia de valores perdidos (*NA*) en bastantes características.
 
 ```{r}
-head(full.set)
+summary(full.set)
 ```
 
-- Análisis de valores perdidos
-
-```{r}
-getLostValuesStats <- function() {
-    lost.count <- colSums(sapply(select(full.set, - SalePrice), is.na))
-    lost.count <- subset(lost.count, lost.count > 0)
-    lost.percentage <- (lost.count / nrow(full.set)) * 100
-
-    return(data.frame(lost.count, lost.percentage))
-}
-
-getLostValuesStats()
-```
-
-```{r}
-lost.values.count <- full.set[, colSums(is.na(select(full.set, - SalePrice))) > 0]
-
-is.lost.value <- as.data.frame(ifelse(is.na(lost.values.count), 0, 1))
-is.lost.value <- is.lost.value[, order(colSums(is.lost.value))]
-
-is.lost.value.grid <- expand.grid(list(x = 1:nrow(is.lost.value), y = colnames(is.lost.value)))
-is.lost.value.grid$m <- as.vector(as.matrix(is.lost.value))
-is.lost.value.grid <- data.frame(x = unlist(is.lost.value.grid$x), y = unlist(is.lost.value.grid$y), m = unlist(is.lost.value.grid$m))
-
-ggplot2::ggplot(is.lost.value.grid) +
-      ggplot2::geom_tile(ggplot2::aes(x = x, y = y, fill = factor(m))) +
-      ggplot2::scale_fill_manual(values = c("white", "black"), name = "Perdido\n(0=Yes, 1=No)") +
-      ggplot2::theme_light() +
-      ggplot2::ylab("") + ggplot2::xlab("") +
-      ggplot2::ggtitle("Valores perdidos en el conjunto total de datos")
-```
-
-- Análisis de la distribución de la variable clase
+Otra característica a destacar es la elevada diferencia entre los valores de la media (180921) y la mediana (163000) de la variable clase *SalePrice* ($17921 de diferencia). Esto puede apuntar a una desviación por la presencia de valores anómalos.
 
 ```{r}
 par(mfrow = c(2, 2))
@@ -112,23 +100,50 @@ boxplot(log10(train$SalePrice), main = "Log10(SalePrice)")
 par(mfrow = c(1, 1))
 ```
 
-- Distribución de los valores perdidos en función de la variable Log(SalePrice)
+Se ha podido comprobar la clara desviación de los datos y como la aplicación de logaritmos ayuda en su corrección. De esta forma, se aplicará esta modificación para eliminar esta asimetria (o sesgo) en las operaciones que utilicen esta variable.
 
-```{r} # TODO: DELETE ¿?
-lost.values.features <- rownames(getLostValuesStats())
-factor.features <- names(train)[which(sapply(train, is.factor))]
-lost.values.features.factor <- dplyr::intersect(factor.features, lost.values.features)
+## Análisis de valores perdidos
 
-plots <- lapply(lost.values.features.factor, function(feature) {
-    categories <- train[, feature]
-    ggplot(data = train, aes(x = feature, y = log(SalePrice), fill = categories)) +
-        geom_boxplot()
-})
+Dado que se ha advertido de una elevada presencia de valores perdidos, se procede a la obtener una información clara de los valores perdidos que contiene cada característica. Para ello se define la función *getLostValuesStats*, de esta forma se podrá comprobar recurrentemente, de una forma rápida, cuántos valores perdidos quedan por tratar.
 
-cowplot::plot_grid(plotlist = plots, ncol = 3)
+```{r}
+getLostValuesStats <- function() {
+    lost.count <- colSums(sapply(select(full.set, - SalePrice), is.na))
+    lost.count <- subset(lost.count, lost.count > 0)
+    lost.percentage <- (lost.count / nrow(full.set)) * 100
+
+    return(data.frame(lost.count, lost.percentage))
+}
+
+getLostValuesStats()
 ```
 
-- Examinamos la distribución de las variables continuas con respecto a Log(SalePrice)
+Ahora se procede a obtener una visual del estado del conjunto de datos, en cuanto lo que se refiere a la inclusión de este tipo de valores.
+
+```{r}
+lost.values.count <- full.set[, colSums(is.na(select(full.set, - SalePrice))) > 0]
+
+is.lost.value <- as.data.frame(ifelse(is.na(lost.values.count), 0, 1))
+is.lost.value <- is.lost.value[, order(colSums(is.lost.value))]
+
+is.lost.value.grid <- expand.grid(list(x = 1:nrow(is.lost.value), y = colnames(is.lost.value)))
+is.lost.value.grid$m <- as.vector(as.matrix(is.lost.value))
+is.lost.value.grid <- data.frame(x = unlist(is.lost.value.grid$x), y = unlist(is.lost.value.grid$y), m = unlist(is.lost.value.grid$m))
+
+ggplot2::ggplot(is.lost.value.grid) +
+    ggplot2::geom_tile(ggplot2::aes(x = x, y = y, fill = factor(m))) +
+    ggplot2::scale_fill_manual(values = c("white", "black"), name = "Perdido:\n  0: Si\n  1: No") +
+    ggplot2::theme_light() +
+    ggplot2::ylab("") +
+    ggplot2::xlab("") +
+    ggplot2::ggtitle("Valores perdidos en el conjunto total de datos")
+```
+
+## Tratamiento de los valores perdidos
+
+Dada la heterogeneidad de los valores faltantes, se procederá a un análisis muy pormenorizado. En primer lugar, se tratarán las características numéricas con valores faltantes más representativos y luego se analizarán las variables categóricas.
+
+En primer lugar, se procede a examinar la distribución de las variables numéricas, que contengan valores perdidos, con respecto a la variable *Log(SalePrice)*. Se puede observar que, además de la presencia de valores perdidos, hay algunas variables que contienen un elevado número de entradas con valor 0 (por ejemplo: *MasVnrArea*).
 
 ```{r}
 lost.values.features <- rownames(getLostValuesStats())
@@ -140,17 +155,17 @@ plots <- lapply(lost.values.features.numeric, function(feature) {
           geom_point() +
           geom_smooth(method = "lm") +
           xlab(label = feature) +
-          ylab(label = "Log(SalePrice)")
+          ylab(label = "Price")
 })
 
 cowplot::plot_grid(plotlist = plots, ncol = 3)
 ```
 
-# Tratamiento de los valores perdidos
+### GarageYrBlt
 
-- GarageYrBlt
+Se aprecia que *GarageYrBlt* (año de construcción del garage) es una propidad que, lógicamente, está muy relacionada con *YearBuilt* (año de construcción). En general, se puede decir que *GarageYrBlt* tiende a ser igual a *YearBuilt*. Por consiguiente, en los valores perdidos de GarageYrBlt, se procede a asígnar el correspondiente valor de YearBuilt.
 
-Se aprecia que es una propidad que, lógicamente, está muy relacionada con YearBuilt (año de construcción). En general, se puede decir que GarageYrBlt tiende a ser igual a YearBuilt. Por consiguiente, en los valores perdidos de GarageYrBlt, se procede a asígnar el correspondiente valor de YearBuilt.
+Así mismo, en la gráfica se observa la existencia de una inconsistencia, dado que una de la instancias toma valor 2207, cuando no es posible que contenga dicho año. Se sobreentiende que el valor que debería contener es 2007.
 
 ```{r}
 ggplot(data = full.set, aes(x = GarageYrBlt, y = YearBuilt)) +
@@ -160,12 +175,12 @@ ggplot(data = full.set, aes(x = GarageYrBlt, y = YearBuilt)) +
 full.set$GarageYrBlt[full.set$GarageYrBlt == 2207] <- 2007
 full.set$GarageYrBlt[is.na(full.set$GarageYrBlt)] <- full.set$YearBuilt[is.na(full.set$GarageYrBlt)]
 
-updatePartitions()
+updatePartitions() # Se actualizan los valores de los subconjuntos de entrenamiento y test
 ```
 
-- LotFrontage
+### LotFrontage
 
-Por lógica, se puede decir que el área de la propiedad con la longitud de la fachada. Para confirmarlo, comprobamos la correlación entre ellas:
+Por lógica, se puede decir que el área de la propiedad (*LotArea*) guarda relación con la longitud de la fachada (*LotFrontage*). Para confirmarlo, comprobamos la correlación entre ellas:
 
 ```{r}
 cor(full.set$LotFrontage, full.set$LotArea, use = "complete.obs")
@@ -186,7 +201,7 @@ plotLogLotRelation <- ggplot(data = full.set, aes(x = log(LotArea), y = log(LotF
 cowplot::plot_grid(plotLotRelation, plotLogLotRelation, ncol = 2)
 ```
 
-Se puede confirmar que existe una alta correlación directa entre *LotFrontage* con *LotArea*. Dado, que estas dos propiedades están relacionadas, seguramente una de ellas sea desechada en el proceso de selección de variables. Idependientemente de ello, en este paso sustituiremos los valores de *LotFrontage*, por la mediana de los valores existentes.
+Se puede confirmar que existe una importante correlación entre *LotFrontage* y *LotArea*. Dado que estas dos propiedades están relacionadas, seguramente una de ellas sea desechada en el proceso de selección de variables. Independientemente de ello, en este paso sustituiremos los valores de *LotFrontage*, por la mediana de los valores existentes.
 
 ```{r}
 full.set$LotFrontage[is.na(full.set$LotFrontage)] <- mean(full.set$LotFrontage[!is.na(full.set$LotFrontage)])
@@ -194,14 +209,14 @@ full.set$LotFrontage[is.na(full.set$LotFrontage)] <- mean(full.set$LotFrontage[!
 updatePartitions()
 ```
 
+Finalmente, observamos la correlaciones después de realizar las modificaciones y apreciamos como se han modificado pero siguen conservando la misma tendencia.
+
 ```{r}
 cor(full.set$LotFrontage, full.set$LotArea, use = "complete.obs")
 cor(log(full.set$LotFrontage), log(full.set$LotArea), use = "complete.obs")
 ```
 
-Observamos que la correlación continúa siendo similar después de tratar los valores perdidos en *LotFrontage*.
-
-**TODO:** Quizás remplazar con la media no sea la mejor opción (cambia bastante la correlación). Si no se encuentra una solución mejor, quizás habría que cargarse directamente la variable.
+Visualmente se aprecia que la correlación continúa siendo similar, después de tratar los valores perdidos en *LotFrontage*.
 
 ```{r}
 ggplot(data = full.set, aes(x = log(LotArea), y = log(LotFrontage))) +
@@ -209,23 +224,22 @@ ggplot(data = full.set, aes(x = log(LotArea), y = log(LotFrontage))) +
           geom_smooth(method = "lm")
 ```
 
-- MasVnrArea
+### MasVnrArea
 
-Existe una gran cantidad de entradas con valor 0. Esto seguramente se deba a la carencia de "chapado":
+En esta característica (área de chapa de mampostería), existen una gran cantidad de entradas con valor 0. Esto, seguramente, se deba a la carencia de chapado en la vivienda. Para confirmarlo, visualizamos el cruce entre esta variable y el precio de venta (*SalePrice*), clasificando las intancias según el tipo de chapado de mampostería que tiene la vivienda.
 
 ```{r}
 ggplot2::qplot(data = train, x = log(MasVnrArea), y = log(SalePrice), col = MasVnrType)
 ```
 
-También observamos que en ambas variables los valores perdidos (8) forman parte de los mismos ejemplos:
+También observamos que en ambas variables los valores perdidos (8) forman parte, prácticamente, de los mismos ejemplos:
 
 ```{r}
 full.set$Id[is.na(full.set$MasVnrArea)]
 full.set$Id[is.na(full.set$MasVnrType)]
 ```
 
-# TODO: hay una entrada más en el conjunto de test
-Por consiguiente, se elimina la caraterística *MasVnrArea*, ya que las entradas con valor 0, por ser del tipo "None", hacen que la información desprendida de la variable esté "deformada".
+Se elimina la caraterística *MasVnrArea*, ya que las entradas con valor 0, por ser del tipo "None", hacen que la información desprendida de la variable esté deformada.
 
 ```{r}
 full.set <- dplyr::select(full.set, - MasVnrArea)
@@ -239,7 +253,7 @@ Ahora se deben tratar los valores perdidos de *MasVnrType*. Para ello, observamo
 qplot(data = train, x = MasVnrType, y = log10(SalePrice), geom = c("boxplot"), fill = MasVnrType)
 ```
 
-Asignamos a los valores perdidos el tipo "BrkFace", por mayor proximidad de sus medias. Aunque también se les podría asignar el tipo "Stone".
+Asignamos a los valores perdidos el tipo *BrkFace*, por mayor proximidad de sus medias. Aunque también se les podría asignar el tipo "Stone".
 
 ```{r}
 full.set$MasVnrType[is.na(full.set$MasVnrType)] <- "BrkFace"
@@ -253,9 +267,9 @@ Finalmente, observamos la distribución resultante en las categorías de *MasVnr
 qplot(data = train, x = train$MasVnrType, y = log10(train$SalePrice), geom = c("boxplot"), fill = train$MasVnrType)
 ```
 
-## Variables categóricas
+### Tratamiento de variables categóricas
 
-Las siguientes caraterísticas con valores perdidos se corresponden con aquellas que contienen entradas en las que hay una ausencia de la propiedad a la que representan. Por ejemplo, la propiedad *PoolQC* representa la calidad de la piscina, pero es obvio que en aquellas propiedades en las haya una ausencia de piscina, será inviable representar su calidad. Por consiguiente, se le asignarán el tipo "None" a aquellos valores ausentes (NA). Las caracteríasticas que contienen este tipo de valores perdidos son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
+Las siguientes caraterísticas con valores perdidos se corresponden con aquellas que contienen entradas en las que hay una ausencia de la propiedad a la que representan. Por ejemplo, la propiedad *PoolQC* representa la calidad de la piscina. Pero es obvio que en aquellas propiedades en las haya una ausencia de piscina, será inviable representar su calidad. Por consiguiente, se le asignarán el tipo "None" a aquellos valores ausentes (*<NA>*). Las caracteríasticas que contienen este tipo de valores perdidos son:  *PoolQC*,   *MiscFeature*, *Alley*,  *Fence*, *FireplaceQu*, *GarageCond*, *GarageFinish*, *GarageQual*, *GarageType*, *BsmtCond*, *BsmtExposure*, *BsmtFinType1*, *BsmtFinType2* y *BsmtQual*.
 
 ```{r}
 categorical.features <- c(
@@ -286,9 +300,9 @@ for (feature in categorical.features) {
 updatePartitions()
 ```
 
-- Electrical
+### Electrical
 
-Esta característica presenta un valor perdido. Dada la mínima influencia que puede tener, se le asigna la categoría mayoritaria.
+Esta característica presenta solamente un valor perdido. Dada la mínima influencia que puede tener, se le asigna la categoría mayoritaria.
 
 ```{r}
 full.set$Electrical[is.na(full.set$Electrical)] <- as.character(sort(full.set$Electrical, decreasing = TRUE)[1])
@@ -296,16 +310,15 @@ full.set$Electrical[is.na(full.set$Electrical)] <- as.character(sort(full.set$El
 updatePartitions()
 ```
 
-# Corrección de valores perdidos en el conjunto de test
+### Corrección de valores perdidos en el conjunto de test
 
-En primer lugar, se examinan los valores perdidos que presenta el conjunto de test y se visualizan de la misma forma que se procedió con el conjunto de entrenamiento.
+Se examinan los valores perdidos que restan el dataset y se aprecia que aún existen algunos datos sin tratar. Aunque estas entradas pertenecen al conjunto de test, se proceden a procesar de la misma forma que se hizo en el conjunto de entrenamiento.
 
 ```{r}
 getLostValuesStats()
 ```
 
-# TODO: ¿En las caraterísticas que presenten valores perdidos y ya se haya examinado previamente, se proceden a tratar de la misma forma para realizar un procedimiento consistente?
-Así mismo, se procede a tratar las demás variables. Por una parte, se procesan las de tipo numérico, asignando la mediana a los valores faltantes.
+Por una parte, se procesan las características de tipo numérico, asignando la mediana a los valores faltantes.
 
 ```{r}
 lost.test.numeric.features <- c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea")
@@ -335,35 +348,53 @@ Antes de continuar, comprobamos que no hay valores perdidos en ninguno de los do
 getLostValuesStats()
 ```
 
-# Transformación de datos
+# Transformación de los datos
 
-En primer lugar, se procede a eliminar la propiedad Id de los conjuntos de entrenamiento y test.
+En esta sección se procederá a aplicar determinados procesos sobre los datos, tales como: eliminación de variables superfluas, generación de variables, eliminación de intancias, escalado de los datos... de forma que se obtenga una conjunto de datos resultate óptimo para la creación del modelo.
+
+En primer lugar, se procede a eliminar la propiedad *Id* de los conjuntos de entrenamiento y test, debido a su irrelevancia.
 
 ```{r}
 train.transformed <- dplyr::select(train, - Id)
 test.transformed <- dplyr::select(test, - Id)
 ```
 
-# Tratamiento de outliers
+## Tratamiento de outliers
+
+En la fase de análisis de los datos se ha observado como la propiedad *GrLivArea* (area habitable de la vivienda), contiene algunas instancias que se podrían etiquetar como valores anómalos.
 
 ```{r}
-plot.with.outliers <- ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + ggtitle("With Outliers") + geom_point()
-plot.with.outliers.log <- ggplot(train.transformed, aes(y = log(SalePrice), x = log(GrLivArea))) + ggtitle("With Outliers (Log())") + geom_point()
+plot.with.outliers <- ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + 
+    ggtitle("With Outliers") + geom_point()
+
+plot.with.outliers.log <- ggplot(train.transformed, aes(y = log(SalePrice), x = log(GrLivArea))) + 
+    ggtitle("With Outliers (Log())") + geom_point()
+
 cowplot::plot_grid(plot.with.outliers, plot.with.outliers.log, ncol = 2)
+```
 
+Se puede aprecicar como hay algunas intancias con valores muy alejados de la distribución. Incluso aplicando logaritmos, toman valores alejados de la distribución. Más adelante se comprobará como esta variable tiene una gran importancia en el model. Para evitar desviaciones, se procede a eliminarlos del conjunto de datos.
+
+```{r}
 train.transformed[train.transformed$GrLivArea > 4000,]$GrLivArea <- mean(train.transformed$GrLivArea) %>% as.numeric
-
 ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + ggtitle("Without Outliers") + geom_point()
 ```
 
+Se procede a volver a unir ambos subconjuntos, para aplicar conjuntamente las siguientes transformaciones.
 
 ```{r}
 full.set.transformed <- data.frame(data.table::rbindlist(list(train.transformed, test.transformed), use.names = F, fill = F))
 ```
 
-- Feature engeneriing
+### Ingeniería de caraterísticas
 
-Creación de una nueva variable: Area total basement e
+En este apartado, se procede a la eliminación y generacìón de características del dataset. Tal y como se ha comentado en el *"Análisis de valores perdidos"*, la característica *LotFrontage* es bastante redundante respecto a la propiedad *LotArea*. Y se ha "deformado" la correlación entre ambas al realizar el tratamiento de valores perdidos. Debido a esto, se procede a eliminar la característica.
+
+Así mismo, se generan las siguientes características, que intuitivamente y tras sucesivas generaciones de modelos ayudan a la generalización del mismo:
+
+- **TotalSF**: superficie de la vivienda, en pies cuadrados. Se genera utilizando las características que referencian la superficie del sótano (*TotalBsmtSF*), primer piso (*X1stFlrSF*) y segundo piso (*X2ndFlrSF*).
+- **Age**: edad efectiva de la vivienda. Se genera sustayendo el año de remodelación de la vivienda (*YearRemodAdd*) al año de venta de la misma (*YrSold*).
+- **TotalProch**: area total de porche, en pies cuatrados. Se genera utlizando las varariable que contienene información referente a las superficise de distintos tipos de porches (*EnclosedPorch*, *ScreenPorch* y *X3SsnPorch*).
 
 ```{r}
 full.set.transformed <- dplyr::select(full.set.transformed, - LotFrontage)
@@ -375,15 +406,15 @@ full.set.transformed$Age <- full.set.transformed$YrSold - full.set.transformed$Y
 full.set.transformed$TotalProch <- full.set.transformed$EnclosedPorch + full.set.transformed$ScreenPorch + full.set.transformed$X3SsnPorch
 ```
 
-## Regularización de las variables continuas
+### Regularización de las variables continuas
 
-Tal y como se ha mostrado, la variable *SalePrice* contiene una distribución asimétrica. Por consiguiente, para evitar el efecto que los valores extremos puedan causar, se procede a aplicar logaritmos a los valores de la distribución. 
-
-Así mismo, se procede a mostrar diagramas de densidad de cada una de las características que contengan datos númericos. De esta forma se podrá observa que transformaciones pueden ser convenientes de hacer a cada variable.
+Tal y como se ha mostrado en al análisis preliminar, la variable *SalePrice* contiene una distribución asimétrica. Por consiguiente, para evitar el efecto que los valores extremos puedan causar, se procede a aplicar logaritmos a los valores de la distribución.
 
 ```{r}
 full.set.transformed$SalePrice <- log(full.set.transformed$SalePrice)
 ```
+
+Así mismo, se procede a mostrar diagramas de densidad de cada una de las características que contienen datos númericos. De esta forma, se podrán observar la tendencias de cada una de las distribuciones.
 
 ```{r}
 continuous.features <- c(
@@ -431,6 +462,8 @@ plots <- lapply(continuous.features, function(feature) {
 
 cowplot::plot_grid(plotlist = plots, ncol = 3)
 ```
+
+### Otras transformaciones
 
 Center & scale....
 
@@ -487,7 +520,7 @@ train.processed.partition.train <- train.processed[train.processed.partition.ind
 train.processed.partition.validation <- train.processed[-train.processed.partition.index,]
 ```
 
-```{r, echo = FALSE}
+```{r}
 set.seed(SEED)
 garbage <- capture.output(
     model.partial <- caret::train(SalePrice ~ .,
@@ -559,22 +592,16 @@ ensembleTrain <- function(train.set) {
 }
 ```
 
-```{r, echo = FALSE}
-model.ensemble <- ensembleTrain(train.processed.partition.train)
-```
-
 ```{r}
+model.ensemble <- ensembleTrain(train.processed.partition.train)
 model.ensemble
 predictAndEvaluate(model.ensemble, train.processed.partition.validation)
 ```
 
 ## Full train
 
-```{r, echo = FALSE}
-model.full <- ensembleTrain(train.processed)
-```
-
 ```{r}
+model.full <- ensembleTrain(train.processed)
 model.full
 ```
 

@@ -13,7 +13,7 @@ knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
 # Inspección de los datos
 
 ```{r, echo=FALSE}
-required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble", "dummies")
+required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
 if (length(new_packages)) install.packages(new_packages)
 
@@ -27,7 +27,6 @@ library(data.table)
 library(Metrics)
 library(cowplot)
 library(caretEnsemble)
-library(dummies)
 
 SEED <- 12345
 setwd("C:/Users/cento/Documents/MasterUIMP/Practicas/aprendizajeautomatico/kaggle_house_prices")
@@ -436,6 +435,7 @@ cowplot::plot_grid(plotlist = plots, ncol = 3)
 Center & scale....
 
 ```{r}
+set.seed(SEED)
 full.set.preProcessed <- caret::preProcess(select(full.set.transformed, - SalePrice), method = c("center", "scale"))
 full.set.transformed <- predict(full.set.preProcessed, full.set.transformed)
 ```
@@ -489,14 +489,16 @@ train.processed.partition.validation <- train.processed[-train.processed.partiti
 
 ```{r, echo = FALSE}
 set.seed(SEED)
-model.partial <- caret::train(SalePrice ~ .,
-  data = train.processed.partition.train,
-  method = 'gbm',
-  trControl = caret::trainControl(
-  method = 'repeatedcv',
-  number = 10,
-  repeats = 1
-  ))
+garbage <- capture.output(
+    model.partial <- caret::train(SalePrice ~ .,
+      data = train.processed.partition.train,
+      method = 'gbm',
+      trControl = caret::trainControl(
+      method = 'repeatedcv',
+      number = 10,
+      repeats = 1
+      ))
+)
 ```
 
 ```{r}
@@ -535,18 +537,21 @@ ensembleTrain <- function(train.set) {
         allowParallel = TRUE
     )
 
-    modelList <- caretEnsemble::caretList(
-                  SalePrice ~ .,
-                  data = train.set,
-                  trControl = trControl,
-                  metric = "RMSE",
-                  tuneList = list(
-    gbm = caretModelSpec(method = "gbm", tuneGrid = expand.grid(n.trees = 700, interaction.depth = 5,
-                                                          shrinkage = 0.05, n.minobsinnode = 10)),
-    xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = expand.grid(nrounds = 2500, max_depth = 6, min_child_weight = 1.41,
-                                                                  eta = 0.01, gamma = 0.0468, subsample = 0.769,
-                                                                  colsample_bytree = 0.283))
-    ))
+    garbage <- capture.output(
+        modelList <- caretEnsemble::caretList(
+                      SalePrice ~ .,
+                      data = train.set,
+                      trControl = trControl,
+                      metric = "RMSE",
+                      tuneList = list(
+        gbm = caretModelSpec(
+                 method = "gbm", tuneGrid = expand.grid(n.trees = 700, interaction.depth = 5,
+                 shrinkage = 0.05, n.minobsinnode = 10)),
+        xgbTree = caretModelSpec(
+                    method = "xgbTree", tuneGrid = expand.grid(nrounds = 2500, max_depth = 6, min_child_weight = 1.41,
+                        eta = 0.01, gamma = 0.0468, subsample = 0.769, colsample_bytree = 0.283))
+        ))
+    )
 
     greedy_ensemble <- caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
 
@@ -578,5 +583,6 @@ model.full
 ```{r}
 predictions <- predict(model.full, newdata = test.processed)
 prediction.table <- data.frame(Id = test$Id, SalePrice = exp(predictions))
-write.csv(prediction.table, "prediction.csv", row.names = FALSE)
+write.csv(prediction.table, "prediction2.csv", row.names = FALSE)
+print(prediction.table)
 ```

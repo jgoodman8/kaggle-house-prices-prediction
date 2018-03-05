@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/cento/Documents/MasterUIMP/Practicas/aprendizajeautomatico/kaggle_house_prices")
 ```
 
 # Introducción
@@ -17,10 +18,6 @@ El objetivo de este documento es el realizar una predicción de precios de venta
 ## Carga de liberías y datos
 
 Previante a realizar un análisis de los datos, se procede a cargar las liberías de R requeridas para su realización. Así mismo, se cargan los conjuntos de datos de entrenamiento y tests.
-
-```{r, echo=FALSE}
-setwd("C:/Users/cento/Documents/MasterUIMP/Practicas/aprendizajeautomatico/kaggle_house_prices")
-```
 
 ```{r}
 required_packages <- c("ggplot2", "dplyr", "caret", "kernlab", "glmnet", "xgboost", "data.table", "Metrics", "cowplot", "caretEnsemble")
@@ -91,8 +88,8 @@ Otra característica a destacar es la elevada diferencia entre los valores de la
 ```{r}
 par(mfrow = c(2, 2))
 
-hist(train$SalePrice, main = "SalePrice")
-hist(log10(train$SalePrice), main = "Log10(SalePrice)")
+hist(train$SalePrice, main = "SalePrice", xlab = "")
+hist(log10(train$SalePrice), main = "Log10(SalePrice)", xlab = "")
 
 boxplot(train$SalePrice, main = "SalePrice")
 boxplot(log10(train$SalePrice), main = "Log10(SalePrice)")
@@ -131,12 +128,12 @@ is.lost.value.grid$m <- as.vector(as.matrix(is.lost.value))
 is.lost.value.grid <- data.frame(x = unlist(is.lost.value.grid$x), y = unlist(is.lost.value.grid$y), m = unlist(is.lost.value.grid$m))
 
 ggplot2::ggplot(is.lost.value.grid) +
-    ggplot2::geom_tile(ggplot2::aes(x = x, y = y, fill = factor(m))) +
-    ggplot2::scale_fill_manual(values = c("white", "black"), name = "Perdido:\n  0: Si\n  1: No") +
-    ggplot2::theme_light() +
-    ggplot2::ylab("") +
-    ggplot2::xlab("") +
-    ggplot2::ggtitle("Valores perdidos en el conjunto total de datos")
+    geom_tile(aes(x = x, y = y, fill = factor(m))) +
+    scale_fill_manual(values = c("white", "black"), name = "Perdido:\n  0: Si\n  1: No") +
+    theme_light() +
+    ylab("") +
+    xlab("") +
+    ggtitle("Valores perdidos en el conjunto total de datos")
 ```
 
 ## Tratamiento de los valores perdidos
@@ -173,9 +170,10 @@ ggplot(data = full.set, aes(x = GarageYrBlt, y = YearBuilt)) +
           geom_smooth(method = "lm")
 
 full.set$GarageYrBlt[full.set$GarageYrBlt == 2207] <- 2007
-full.set$GarageYrBlt[is.na(full.set$GarageYrBlt)] <- full.set$YearBuilt[is.na(full.set$GarageYrBlt)]
+selected <- is.na(full.set$GarageYrBlt)
+full.set$GarageYrBlt[selected] <- full.set$YearBuilt[selected]
 
-updatePartitions() # Se actualizan los valores de los subconjuntos de entrenamiento y test
+updatePartitions() # Se actualizan los subconjuntos de entrenamiento y test
 ```
 
 ### LotFrontage
@@ -204,7 +202,8 @@ cowplot::plot_grid(plotLotRelation, plotLogLotRelation, ncol = 2)
 Se puede confirmar que existe una importante correlación entre *LotFrontage* y *LotArea*. Dado que estas dos propiedades están relacionadas, seguramente una de ellas sea desechada en el proceso de selección de variables. Independientemente de ello, en este paso sustituiremos los valores de *LotFrontage*, por la mediana de los valores existentes.
 
 ```{r}
-full.set$LotFrontage[is.na(full.set$LotFrontage)] <- mean(full.set$LotFrontage[!is.na(full.set$LotFrontage)])
+selected <- is.na(full.set$LotFrontage)
+full.set$LotFrontage[selected] <- mean(full.set$LotFrontage[!selected])
 
 updatePartitions()
 ```
@@ -364,19 +363,20 @@ test.transformed <- dplyr::select(test, - Id)
 En la fase de análisis de los datos se ha observado como la propiedad *GrLivArea* (area habitable de la vivienda), contiene algunas instancias que se podrían etiquetar como valores anómalos.
 
 ```{r}
-plot.with.outliers <- ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + 
+plot.with.outliers <- ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) +
     ggtitle("With Outliers") + geom_point()
 
-plot.with.outliers.log <- ggplot(train.transformed, aes(y = log(SalePrice), x = log(GrLivArea))) + 
+plot.with.outliers.log <- ggplot(train.transformed, aes(y = log(SalePrice), x = log(GrLivArea))) +
     ggtitle("With Outliers (Log())") + geom_point()
 
 cowplot::plot_grid(plot.with.outliers, plot.with.outliers.log, ncol = 2)
 ```
 
-Se puede aprecicar como hay algunas intancias con valores muy alejados de la distribución. Incluso aplicando logaritmos, toman valores alejados de la distribución. Más adelante se comprobará como esta variable tiene una gran importancia en el model. Para evitar desviaciones, se procede a eliminarlos del conjunto de datos.
+Se puede aprecicar como hay algunas intancias con valores muy alejados de la distribución. Incluso aplicando logaritmos, toman valores alejados de la distribución. Más adelante se comprobará como esta variable tiene una gran importancia en el model. Para evitar desviaciones, se procede a asignarles la media.
 
 ```{r}
-train.transformed[train.transformed$GrLivArea > 4000,]$GrLivArea <- mean(train.transformed$GrLivArea) %>% as.numeric
+GrLivArea.mean <- mean(train.transformed$GrLivArea) %>% as.numeric
+train.transformed[train.transformed$GrLivArea > 4000,]$GrLivArea <- GrLivArea.mean
 ggplot(train.transformed, aes(y = SalePrice, x = GrLivArea)) + ggtitle("Without Outliers") + geom_point()
 ```
 
@@ -438,7 +438,8 @@ continuous.features <- c(
 
 plots <- lapply(continuous.features, function(feature) {
     if (is.numeric(full.set.transformed[, feature])) {
-        ggplot2::ggplot(data = full.set.transformed, aes(x = full.set.transformed[, feature])) +
+        ggplot2::ggplot(data = full.set.transformed,
+        aes(x = full.set.transformed[, feature])) +
                       geom_density() +
                       xlab(feature)
     }
@@ -587,27 +588,27 @@ ensembleTrain <- function(train.set) {
         method = "cv",
         number = 7,
         savePredictions = "final",
-        index = caret::createResample(train.set$OverallQual, 7),
+        index = createResample(train.set$OverallQual, 7),
         allowParallel = TRUE
     )
 
     garbage <- capture.output(
-        modelList <- caretEnsemble::caretList(
+        modelList <- caretList(
                       SalePrice ~ .,
                       data = train.set,
                       trControl = trControl,
                       metric = "RMSE",
                       tuneList = list(
-        gbm = caretEnsemble::caretModelSpec(
+        gbm = caretModelSpec(
                  method = "gbm", tuneGrid = expand.grid(n.trees = 700, interaction.depth = 5,
                  shrinkage = 0.05, n.minobsinnode = 10)),
-        xgbTree = caretEnsemble::caretModelSpec(
+        xgbTree = caretModelSpec(
                     method = "xgbTree", tuneGrid = expand.grid(nrounds = 2500, max_depth = 6, min_child_weight = 1.41,
                         eta = 0.01, gamma = 0.0468, subsample = 0.769, colsample_bytree = 0.283))
         ))
     )
 
-    greedy_ensemble <- caretEnsemble::caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
+    greedy_ensemble <- caretEnsemble(modelList, metric = "RMSE", trControl = trainControl(number = 25))
 
     return(greedy_ensemble)
 }
